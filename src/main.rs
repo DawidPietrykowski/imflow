@@ -5,7 +5,7 @@
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self};
-use std::io::Read;
+use std::io::{Cursor, Read};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::{self, Duration, Instant};
@@ -20,15 +20,15 @@ use iced::widget::{
 use iced::{Center, Element, Fill, Length, Size, Subscription, Task, Theme, keyboard};
 use image::{self, DynamicImage, EncodableLayout, GenericImageView, ImageBuffer, ImageReader};
 
+use clap::Parser;
 use imflow::image::{
-    Approach, ImflowImageBuffer, flatten_image_image, flatten_zune_image, load_available_images,
-    load_image_argb, load_image_argb_imagers, load_thumbnail, map_file, map_file_path,
-    read_zune_image,
+    Approach, ImflowImageBuffer, flatten_image_image, flatten_zune_image, get_embedded_thumbnail,
+    load_available_images, load_image_argb, load_image_argb_imagers, load_thumbnail, map_file,
+    map_file_path, read_zune_image,
 };
 use minifb::{Key, Window, WindowOptions};
 use threadpool::ThreadPool;
 use zune_image::codecs::qoi::zune_core::options::DecoderOptions; // for general image operations
-use clap::Parser;
 // use image::io::Reader as ImageReader; // specifically for Reader
 
 use std::sync::{Arc, mpsc};
@@ -336,28 +336,60 @@ use std::sync::{Arc, mpsc};
 struct State {
     current_image_id: usize,
     loaded_images: HashMap<PathBuf, ImflowImageBuffer>,
+    loaded_images_thumbnails: HashMap<PathBuf, ImflowImageBuffer>,
     available_images: Vec<PathBuf>,
     current_image_path: PathBuf,
     pool: ThreadPool,
     loader_rx: mpsc::Receiver<(PathBuf, ImflowImageBuffer)>,
     loader_tx: mpsc::Sender<(PathBuf, ImflowImageBuffer)>,
-    currently_loading: HashSet<PathBuf>,  // Track what's being loaded
+    currently_loading: HashSet<PathBuf>, // Track what's being loaded
 }
 
 impl State {
     fn new(path: PathBuf) -> Self {
         let current_image_id: usize = 0;
         let mut loaded_images: HashMap<PathBuf, ImflowImageBuffer> = HashMap::new();
+        let mut loaded_thumbnails: HashMap<PathBuf, ImflowImageBuffer> = HashMap::new();
         let available_images = load_available_images(path);
         let new_path = available_images[0].clone();
-        let current_image = load_image_argb_imagers(new_path.clone());
-        loaded_images.insert(new_path.clone(), current_image);
+        // let current_image = load_image_argb_imagers(new_path.clone());
+        // let current_image = load_image_argb_imagers(new_path.clone());
+        // loaded_images.insert(new_path.clone(), current_image);
 
         let (loader_tx, loader_rx) = mpsc::channel();
 
         let pool = ThreadPool::new(32);
 
         let currently_loading = HashSet::new();
+
+        for path in &available_images {
+            if let Some(thumbnail) = get_embedded_thumbnail(path.clone()) {
+                let decoder = image::ImageReader::new(Cursor::new(thumbnail))
+                    .with_guessed_format()
+                    .unwrap();
+                let image = decoder.decode().unwrap();
+
+                let width: usize = image.width() as usize;
+                let height: usize = image.height() as usize;
+                let mut flat = image.into_rgba8().into_raw();
+                let mut buffer: Vec<u32> = vec![0; width * height];
+
+                for (rgba, argb) in flat.chunks_mut(4).zip(buffer.iter_mut()) {
+                    let r = rgba[0] as u32;
+                    let g = rgba[1] as u32;
+                    let b = rgba[2] as u32;
+                    *argb = r << 16 | g << 8 | b;
+                }
+
+                let buf = ImflowImageBuffer {
+                    width,
+                    height,
+                    argb_buffer: buffer,
+                };
+
+                loaded_thumbnails.insert(path.clone(), buf);
+            }
+        }
 
         let mut state = Self {
             current_image_id,
@@ -367,10 +399,13 @@ impl State {
             pool,
             loader_rx,
             loader_tx,
-            currently_loading
+            currently_loading,
+            loaded_images_thumbnails: loaded_thumbnails,
         };
 
-        state.preload_next_images(min(state.available_images.len(), 64));
+        // state.preload_next_images(min(state.available_images.len(), 1));
+
+        // let thumbnail_path = state.available_images[0].clone();
 
         state
     }
@@ -386,10 +421,11 @@ impl State {
             return;
         }
         let tx = self.loader_tx.clone();
-        self.currently_loading.insert(path.clone());        
+        self.currently_loading.insert(path.clone());
 
         self.pool.execute(move || {
             let image = load_image_argb(path.clone());
+            // let image = load_image_argb_imagers(path.clone());
             let _ = tx.send((path, image));
         });
     }
@@ -407,13 +443,48 @@ impl State {
             as usize;
         let new_path = self.available_images[self.current_image_id].clone();
         if !self.loaded_images.contains_key(&new_path) {
-            self.request_load(new_path.clone());
+            // self.request_load(new_path.clone());
         }
         self.current_image_path = new_path;
     }
 
     fn get_current_image(&self) -> Option<&ImflowImageBuffer> {
         self.loaded_images.get(&self.current_image_path)
+    }
+
+    fn get_thumbnail(&mut self) -> &ImflowImageBuffer {
+        if self.loaded_images_thumbnails.contains_key(&self.current_image_path) {
+            return self.loaded_images_thumbnails.get(&self.current_image_path).unwrap();
+        }
+
+        let path = &self.current_image_path;
+        if let Some(thumbnail) = get_embedded_thumbnail(path.clone()) {
+            let decoder = image::ImageReader::new(Cursor::new(thumbnail))
+                .with_guessed_format()
+                .unwrap();
+            let image = decoder.decode().unwrap();
+
+            let width: usize = image.width() as usize;
+            let height: usize = image.height() as usize;
+            let mut flat = image.into_rgba8().into_raw();
+            let mut buffer: Vec<u32> = vec![0; width * height];
+
+            for (rgba, argb) in flat.chunks_mut(4).zip(buffer.iter_mut()) {
+                let r = rgba[0] as u32;
+                let g = rgba[1] as u32;
+                let b = rgba[2] as u32;
+                *argb = r << 16 | g << 8 | b;
+            }
+
+            let buf = ImflowImageBuffer {
+                width,
+                height,
+                argb_buffer: buffer,
+            };
+
+            self.loaded_images_thumbnails.insert(path.clone(), buf);
+        }
+        panic!()
     }
 }
 
@@ -425,8 +496,8 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    const WIDTH: usize = 1920;
-    const HEIGHT: usize = 1080;
+    const WIDTH: usize = 2000;
+    const HEIGHT: usize = 1000;
     let mut window = Window::new(
         "Test - ESC to exit",
         WIDTH,
@@ -441,27 +512,32 @@ fn main() {
 
     let path = args.path.unwrap_or("./test_images".into());
     let mut state = State::new(path);
-    let mut waiting = true;
+    let mut waiting = false;
     window.set_key_repeat_delay(0.1);
     window.set_key_repeat_rate(0.1);
+
+    let thumbs: Vec<&ImflowImageBuffer> = state.loaded_images_thumbnails.values().collect();
+    show_image(&mut window, thumbs[0]);
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         window.update();
         state.check_loaded_images();
-        if window.is_key_pressed(Key::Right, minifb::KeyRepeat::Yes) {
+        if !waiting && window.is_key_pressed(Key::Right, minifb::KeyRepeat::Yes) {
             state.next_image(1);
-            waiting = true;
-        } else if window.is_key_pressed(Key::Left, minifb::KeyRepeat::Yes) {
+            show_image(&mut window, state.get_thumbnail());
+            // waiting = true;
+        } else if !waiting && window.is_key_pressed(Key::Left, minifb::KeyRepeat::Yes) {
             state.next_image(-1);
-            waiting = true;
+            show_image(&mut window, state.get_thumbnail());
+            // waiting = true;
         }
-        if waiting {
-            if let Some(image) = state.get_current_image(){
-                waiting = false;
-            
-                show_image(&mut window, &image);
-            }
-        }
+        // if waiting {
+        //     if let Some(image) = state.get_current_image() {
+        //         waiting = false;
+
+        //         show_image(&mut window, &image);
+        //     }
+        // }
     }
 }
 
