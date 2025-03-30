@@ -4,17 +4,33 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+env_logger = "0.11.7"
 iced = { version = "0.13.1", features = ["debug", "canvas", "tokio", "image"]}
 image = "0.25.6"
 
 itertools = "0.12"
 memmap2 = "0.9.5"
+minifb = "0.28.0"
+pollster = "0.4.0"
 # rustc-hash.workspace = true
 tokio = { version = "1.44.1", features = ["sync"] }
 tracing-subscriber = "0.3"
+wgpu = "24.0.3"
+winit = "0.30.9"
 zune-image = {version = "0.4.15", features = ["all"]}
+
 [profile.dev.package.zune-jpeg]
 opt-level = 3
+[profile.release]
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+lto = false
+panic = 'unwind'
+incremental = false
+codegen-units = 32
+rpath = false
 
 [dev-dependencies]
 criterion = "0.3"
