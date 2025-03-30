@@ -267,6 +267,7 @@ pub fn load_available_images(dir: PathBuf) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
         .unwrap()
         .map(|f| f.unwrap().path())
+        .filter(|f| f.extension().unwrap().to_ascii_lowercase() == "jpg")
         .collect();
     files.sort();
     files

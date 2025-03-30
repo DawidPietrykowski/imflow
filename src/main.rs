@@ -362,6 +362,8 @@ impl State {
 
         let currently_loading = HashSet::new();
 
+
+            let total_start = Instant::now();
         for path in &available_images {
             if let Some(thumbnail) = get_embedded_thumbnail(path.clone()) {
                 let decoder = image::ImageReader::new(Cursor::new(thumbnail))
@@ -390,6 +392,8 @@ impl State {
                 loaded_thumbnails.insert(path.clone(), buf);
             }
         }
+            let total_time = total_start.elapsed();
+            println!("all thumbnails load time: {:?} for {}", total_time, loaded_thumbnails.len());
 
         let mut state = Self {
             current_image_id,
@@ -459,6 +463,7 @@ impl State {
 
         let path = &self.current_image_path;
         if let Some(thumbnail) = get_embedded_thumbnail(path.clone()) {
+            let total_start = Instant::now();
             let decoder = image::ImageReader::new(Cursor::new(thumbnail))
                 .with_guessed_format()
                 .unwrap();
@@ -481,8 +486,12 @@ impl State {
                 height,
                 argb_buffer: buffer,
             };
+            let total_time = total_start.elapsed();
+            println!("thumbnail load time: {:?}", total_time);
 
             self.loaded_images_thumbnails.insert(path.clone(), buf);
+
+            return self.loaded_images_thumbnails.get(&path.clone()).unwrap();
         }
         panic!()
     }
@@ -516,8 +525,7 @@ fn main() {
     window.set_key_repeat_delay(0.1);
     window.set_key_repeat_rate(0.1);
 
-    let thumbs: Vec<&ImflowImageBuffer> = state.loaded_images_thumbnails.values().collect();
-    show_image(&mut window, thumbs[0]);
+    show_image(&mut window, state.get_thumbnail());
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         window.update();
