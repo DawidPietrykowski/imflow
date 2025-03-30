@@ -362,8 +362,9 @@ impl State {
 
         let currently_loading = HashSet::new();
 
-
-            let total_start = Instant::now();
+        let total_start = Instant::now();
+        let mut loaded = 0;
+        let to_load = available_images.len();
         for path in &available_images {
             if let Some(thumbnail) = get_embedded_thumbnail(path.clone()) {
                 let decoder = image::ImageReader::new(Cursor::new(thumbnail))
@@ -390,10 +391,26 @@ impl State {
                 };
 
                 loaded_thumbnails.insert(path.clone(), buf);
+                loaded += 1;
+                println!("{}/{}", loaded, to_load);
+            } else {
+                loaded += 1;
+                if !loaded_images.contains_key(&path.clone()) {
+                    let loaded = load_image_argb(path.clone());
+                    loaded_images.insert(path.clone(), loaded);
+                    // self.request_load(new_path.clone());
+                }
+                // let loaded = load_image_argb(path.clone());
+                // loaded_images.get(&path.clone()).unwrap()
+                println!("none for {:?}", path);
             }
         }
-            let total_time = total_start.elapsed();
-            println!("all thumbnails load time: {:?} for {}", total_time, loaded_thumbnails.len());
+        let total_time = total_start.elapsed();
+        println!(
+            "all thumbnails load time: {:?} for {}",
+            total_time,
+            loaded_thumbnails.len()
+        );
 
         let mut state = Self {
             current_image_id,
@@ -457,8 +474,14 @@ impl State {
     }
 
     fn get_thumbnail(&mut self) -> &ImflowImageBuffer {
-        if self.loaded_images_thumbnails.contains_key(&self.current_image_path) {
-            return self.loaded_images_thumbnails.get(&self.current_image_path).unwrap();
+        if self
+            .loaded_images_thumbnails
+            .contains_key(&self.current_image_path)
+        {
+            return self
+                .loaded_images_thumbnails
+                .get(&self.current_image_path)
+                .unwrap();
         }
 
         let path = &self.current_image_path;
@@ -493,7 +516,14 @@ impl State {
 
             return self.loaded_images_thumbnails.get(&path.clone()).unwrap();
         }
-        panic!()
+        println!("skipping {:?}", path);
+        if !self.loaded_images.contains_key(&path.clone()) {
+            let loaded = load_image_argb(path.clone());
+            self.loaded_images.insert(path.clone(), loaded);
+            // self.request_load(new_path.clone());
+        }
+        // let loaded = load_image_argb(path.clone());
+        self.loaded_images.get(&path.clone()).unwrap()
     }
 }
 
