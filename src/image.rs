@@ -1,5 +1,6 @@
 use iced::widget::image::Handle;
 use iced::widget::image::Image as IcedImage;
+use image::imageops::FilterType;
 // use image::codecs::jpeg::JpegDecoder;
 // use image::codecs::jpeg::JpegDecoder;
 use image::DynamicImage;
@@ -7,6 +8,7 @@ use image::ImageReader;
 use itertools::Itertools;
 use memmap2::Mmap;
 use zune_image::codecs::jpeg::JpegDecoder;
+use zune_image::codecs::qoi::zune_core::colorspace::ColorSpace;
 use zune_image::codecs::qoi::zune_core::options::DecoderOptions;
 use zune_image::image::Image as ZuneImage;
 
@@ -14,6 +16,7 @@ use std::fs;
 use std::fs::File;
 use std::fs::read;
 use std::io;
+use std::io::Cursor;
 use std::io::Read;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -79,93 +82,82 @@ pub fn create_iced_handle(width: u32, height: u32, rgba: Vec<u8>) -> Handle {
     Handle::from_rgba(width, height, rgba)
 }
 
-pub fn load_thumbnail(
-    path: &str,
-    approach: Approach,
-) -> Result<iced::widget::image::Handle, String> {
-    match approach {
-        Approach::Mmap => {
-            let mmap = map_file(path).unwrap();
-            println!("mapped file");
-            let img = read_zune_image(mmap.deref())?;
-            let width = img.dimensions().0 as u32;
-            let height = img.dimensions().1 as u32;
-            println!("loaded");
-            let flat = flatten_zune_image(&img);
-            println!("flattened");
-            let rgba = convert_zune_rgb_to_rgba(flat);
-            println!("rgbad");
-            let conv = create_iced_handle(width, height, rgba);
-            println!("iced");
+// pub fn load_thumbnail(
+//     path: &str,
+//     approach: Approach,
+// ) -> Result<iced::widget::image::Handle, String> {
+//     match approach {
+//         Approach::Mmap => {
+//             let mmap = map_file(path).unwrap();
+//             println!("mapped file");
+//             let img = read_zune_image(mmap.deref())?;
+//             let width = img.dimensions().0 as u32;
+//             let height = img.dimensions().1 as u32;
+//             println!("loaded");
+//             let flat = flatten_zune_image(&img);
+//             println!("flattened");
+//             let rgba = convert_zune_rgb_to_rgba(flat);
+//             println!("rgbad");
+//             let conv = create_iced_handle(width, height, rgba);
+//             println!("iced");
 
-            Ok(conv)
-        }
-        Approach::Path => {
-            let img = read_zune_image_path(path);
-            let width = img.dimensions().0 as u32;
-            let height = img.dimensions().1 as u32;
-            println!("loaded");
-            let flat = flatten_zune_image(&img);
-            println!("flattened");
-            let rgba = convert_zune_rgb_to_rgba(flat);
-            println!("rgbad");
-            let conv = create_iced_handle(width, height, rgba);
-            println!("iced");
+//             Ok(conv)
+//         }
+//         Approach::Path => {
+//             let img = read_zune_image_path(path);
+//             let width = img.dimensions().0 as u32;
+//             let height = img.dimensions().1 as u32;
+//             println!("loaded");
+//             let flat = flatten_zune_image(&img);
+//             println!("flattened");
+//             let rgba = convert_zune_rgb_to_rgba(flat);
+//             println!("rgbad");
+//             let conv = create_iced_handle(width, height, rgba);
+//             println!("iced");
 
-            Ok(conv)
-        }
-        Approach::ImageRs => {
-            let mmap = map_file(path).unwrap();
-            let img = image::load_from_memory(mmap.deref()).map_err(|e| e.to_string())?;
-            let width = img.width();
-            let height = img.height();
-            println!("loaded");
-            let rgba = flatten_image_image(img);
-            println!("rgbad");
-            let conv = create_iced_handle(width, height, rgba);
-            println!("iced");
+//             Ok(conv)
+//         }
+//         Approach::ImageRs => {
+//             let mmap = map_file(path).unwrap();
+//             let img = image::load_from_memory(mmap.deref()).map_err(|e| e.to_string())?;
+//             let width = img.width();
+//             let height = img.height();
+//             println!("loaded");
+//             let rgba = flatten_image_image(img);
+//             println!("rgbad");
+//             let conv = create_iced_handle(width, height, rgba);
+//             println!("iced");
 
-            Ok(conv)
-        }
-        Approach::ImageRsPath => {
-            let img = ImageReader::open(path).unwrap().decode().unwrap();
-            let width = img.width();
-            let height = img.height();
-            println!("loaded");
-            let rgba = flatten_image_image(img);
-            println!("rgbad");
-            let conv = create_iced_handle(width, height, rgba);
-            println!("iced");
+//             Ok(conv)
+//         }
+//         Approach::ImageRsPath => {
+//             let img = ImageReader::open(path).unwrap().decode().unwrap();
+//             let width = img.width();
+//             let height = img.height();
+//             println!("loaded");
+//             let rgba = flatten_image_image(img);
+//             println!("rgbad");
+//             let conv = create_iced_handle(width, height, rgba);
+//             println!("iced");
 
-            Ok(conv)
-        }
-        Approach::Iced => Ok(Handle::from_path(path)),
-    }
-}
+//             Ok(conv)
+//         }
+//         Approach::Iced => Ok(Handle::from_path(path)),
+//     }
+// }
 
 pub fn load_image_argb(path: PathBuf) -> ImflowImageBuffer {
     let total_start = Instant::now();
 
-    // Stage 1: Memory map the file
-    let stage1_start = Instant::now();
-    let mmap = map_file_path(path.clone()).unwrap();
-    let stage1_time = stage1_start.elapsed();
-    // println!("File mapping took: {:?}", stage1_time);
-
-    // let file = File::open(path).unwrap();
     let file_contents = read(path).unwrap();
-    // let mmap = map_file_path(path.into()).unwrap();
 
     let mut decoder = JpegDecoder::new(&file_contents);
-    let options = DecoderOptions::new_fast()
-        .jpeg_set_max_scans(5)
-        .jpeg_set_out_colorspace(zune_image::codecs::qoi::zune_core::colorspace::ColorSpace::BGRA);
+    let options = DecoderOptions::new_fast().jpeg_set_out_colorspace(ColorSpace::BGRA);
     decoder.set_options(options);
     decoder.decode_headers().unwrap();
     let info = decoder.info().unwrap();
     let width = info.width as usize;
     let height = info.height as usize;
-    println!("{} x {}", width, height);
     let mut buffer2: Vec<u8> = vec![0; width * height * 4];
     decoder.decode_into(buffer2.as_mut_slice());
 
@@ -213,6 +205,19 @@ pub struct ImflowImageBuffer {
     pub width: usize,
     pub height: usize,
     pub argb_buffer: Vec<u32>,
+}
+
+pub fn image_to_argb_buffer(img: DynamicImage) -> Vec<u32> {
+    let mut buffer: Vec<u32> = vec![0; (img.width() * img.height()) as usize];
+    let mut flat = img.into_rgba8().into_raw();
+
+    for (rgba, argb) in flat.chunks_mut(4).zip(buffer.iter_mut()) {
+        let r = rgba[0] as u32;
+        let g = rgba[1] as u32;
+        let b = rgba[2] as u32;
+        *argb = r << 16 | g << 8 | b;
+    }
+    buffer
 }
 
 pub fn load_image_argb_imagers(path: PathBuf) -> ImflowImageBuffer {
@@ -277,11 +282,48 @@ pub fn get_embedded_thumbnail(path: PathBuf) -> Option<Vec<u8>> {
     let meta = rexiv2::Metadata::new_from_path(path);
     match meta {
         Ok(meta) => {
+            // println!("{:?}", meta.get_preview_images());
             meta.get_thumbnail().map(|v| v.to_vec())
-        }
-        Err(e) => None,
+        },
+        Err(_) => None,
     }
-    // let file = std::fs::File::open(path).ok()?;
-    // let exif = Reader::new().read_from_container(&mut std::io::BufReader::new(file)).ok()?;
-    // exif.get_thumbnail()
+}
+
+pub fn load_thumbnail(path: PathBuf) -> ImflowImageBuffer {
+    if let Some(thumbnail) = get_embedded_thumbnail(path.clone()) {
+        let decoder = image::ImageReader::new(Cursor::new(thumbnail))
+            .with_guessed_format()
+            .unwrap();
+        let image = decoder.decode().unwrap();
+
+        let width: usize = image.width() as usize;
+        let height: usize = image.height() as usize;
+        let mut flat = image.into_rgba8().into_raw();
+        let mut buffer: Vec<u32> = vec![0; width * height];
+
+        for (rgba, argb) in flat.chunks_mut(4).zip(buffer.iter_mut()) {
+            let r = rgba[0] as u32;
+            let g = rgba[1] as u32;
+            let b = rgba[2] as u32;
+            *argb = r << 16 | g << 8 | b;
+        }
+
+        ImflowImageBuffer {
+            width,
+            height,
+            argb_buffer: buffer,
+        }
+    } else {
+        let reader = image::ImageReader::new(Cursor::new(read(path).unwrap()));
+        let image = reader.decode().unwrap().resize(640, 480, FilterType::Nearest);
+        let width = image.width() as usize;
+        let height = image.height() as usize;
+        let buffer = image_to_argb_buffer(image);
+
+        ImflowImageBuffer {
+            width,
+            height,
+            argb_buffer: buffer,
+        }
+    }
 }

@@ -694,10 +694,10 @@ impl MainApp {
                     .clone();
                 self.current_image = Some(path.clone());
                 if !self.loaded_images.contains_key(&path.to_path_buf()) {
-                    self.loaded_images.insert(
-                        path.to_path_buf(),
-                        load_thumbnail(path.to_str().unwrap(), Approach::ImageRs).unwrap(),
-                    );
+                    // self.loaded_images.insert(
+                    //     path.to_path_buf(),
+                    //     load_thumbnail(path.to_str().unwrap(), Approach::ImageRs).unwrap(),
+                    // );
                 }
             }
         }
