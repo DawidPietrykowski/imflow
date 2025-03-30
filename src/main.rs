@@ -2,7 +2,8 @@
 //! by John Conway. It leverages a `Canvas` together with other widgets.
 // use grid::Grid;
 
-use std::collections::HashMap;
+use std::cmp::min;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self};
 use std::io::Read;
 use std::ops::Deref;
@@ -20,13 +21,17 @@ use iced::{Center, Element, Fill, Length, Size, Subscription, Task, Theme, keybo
 use image::{self, DynamicImage, EncodableLayout, GenericImageView, ImageBuffer, ImageReader};
 
 use imflow::image::{
-    flatten_image_image, flatten_zune_image, load_available_images, load_image_argb, load_image_argb_imagers, load_thumbnail, map_file, map_file_path, read_zune_image, Approach, ImflowImageBuffer
+    Approach, ImflowImageBuffer, flatten_image_image, flatten_zune_image, load_available_images,
+    load_image_argb, load_image_argb_imagers, load_thumbnail, map_file, map_file_path,
+    read_zune_image,
 };
 use minifb::{Key, Window, WindowOptions};
+use threadpool::ThreadPool;
 use zune_image::codecs::qoi::zune_core::options::DecoderOptions; // for general image operations
+use clap::Parser;
 // use image::io::Reader as ImageReader; // specifically for Reader
 
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 
 // use winit::{
 //     application::ApplicationHandler,
@@ -333,21 +338,66 @@ struct State {
     loaded_images: HashMap<PathBuf, ImflowImageBuffer>,
     available_images: Vec<PathBuf>,
     current_image_path: PathBuf,
+    pool: ThreadPool,
+    loader_rx: mpsc::Receiver<(PathBuf, ImflowImageBuffer)>,
+    loader_tx: mpsc::Sender<(PathBuf, ImflowImageBuffer)>,
+    currently_loading: HashSet<PathBuf>,  // Track what's being loaded
 }
 
 impl State {
-    fn new() -> Self {
+    fn new(path: PathBuf) -> Self {
         let current_image_id: usize = 0;
         let mut loaded_images: HashMap<PathBuf, ImflowImageBuffer> = HashMap::new();
-        let available_images = load_available_images("./test_images".into());
+        let available_images = load_available_images(path);
         let new_path = available_images[0].clone();
         let current_image = load_image_argb_imagers(new_path.clone());
         loaded_images.insert(new_path.clone(), current_image);
-        Self {
+
+        let (loader_tx, loader_rx) = mpsc::channel();
+
+        let pool = ThreadPool::new(32);
+
+        let currently_loading = HashSet::new();
+
+        let mut state = Self {
             current_image_id,
             loaded_images,
             available_images,
             current_image_path: new_path,
+            pool,
+            loader_rx,
+            loader_tx,
+            currently_loading
+        };
+
+        state.preload_next_images(min(state.available_images.len(), 64));
+
+        state
+    }
+
+    fn preload_next_images(&mut self, n: usize) {
+        for image in self.available_images.clone().iter().take(n) {
+            self.request_load(image.clone());
+        }
+    }
+
+    fn request_load(&mut self, path: PathBuf) {
+        if self.loaded_images.contains_key(&path) || self.currently_loading.contains(&path) {
+            return;
+        }
+        let tx = self.loader_tx.clone();
+        self.currently_loading.insert(path.clone());        
+
+        self.pool.execute(move || {
+            let image = load_image_argb(path.clone());
+            let _ = tx.send((path, image));
+        });
+    }
+
+    fn check_loaded_images(&mut self) {
+        while let Ok((path, image)) = self.loader_rx.try_recv() {
+            self.loaded_images.insert(path.clone(), image);
+            self.currently_loading.remove(&path);
         }
     }
 
@@ -357,18 +407,24 @@ impl State {
             as usize;
         let new_path = self.available_images[self.current_image_id].clone();
         if !self.loaded_images.contains_key(&new_path) {
-            let new_image = load_image_argb(new_path.clone());
-            self.loaded_images.insert(new_path.clone(), new_image);
+            self.request_load(new_path.clone());
         }
         self.current_image_path = new_path;
     }
 
-    fn get_current_image(&self) -> &ImflowImageBuffer {
-        self.loaded_images.get(&self.current_image_path).unwrap()
+    fn get_current_image(&self) -> Option<&ImflowImageBuffer> {
+        self.loaded_images.get(&self.current_image_path)
     }
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    path: Option<PathBuf>,
+}
+
 fn main() {
+    let args = Args::parse();
     const WIDTH: usize = 1920;
     const HEIGHT: usize = 1080;
     let mut window = Window::new(
@@ -381,19 +437,30 @@ fn main() {
         panic!("{}", e);
     });
 
-    window.set_target_fps(60);
+    window.set_target_fps(120);
 
-    let mut state = State::new();
-    show_image(&mut window, state.get_current_image());
+    let path = args.path.unwrap_or("./test_images".into());
+    let mut state = State::new(path);
+    let mut waiting = true;
+    window.set_key_repeat_delay(0.1);
+    window.set_key_repeat_rate(0.1);
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         window.update();
-        if window.is_key_down(Key::Right) {
+        state.check_loaded_images();
+        if window.is_key_pressed(Key::Right, minifb::KeyRepeat::Yes) {
             state.next_image(1);
-            show_image(&mut window, state.get_current_image());
-        } else if window.is_key_down(Key::Left) {
+            waiting = true;
+        } else if window.is_key_pressed(Key::Left, minifb::KeyRepeat::Yes) {
             state.next_image(-1);
-            show_image(&mut window, state.get_current_image());
+            waiting = true;
+        }
+        if waiting {
+            if let Some(image) = state.get_current_image(){
+                waiting = false;
+            
+                show_image(&mut window, &image);
+            }
         }
     }
 }
@@ -404,7 +471,7 @@ fn show_image(window: &mut Window, image: &ImflowImageBuffer) {
         .unwrap();
 }
 
-struct GameOfLife {
+struct MainApp {
     is_playing: bool,
     queued_ticks: usize,
     speed: usize,
@@ -430,7 +497,7 @@ enum Message {
     ImageUseNearestToggled(bool),
 }
 
-impl GameOfLife {
+impl MainApp {
     fn new() -> Self {
         let mut dir: Vec<PathBuf> = fs::read_dir(Path::new("./test_images"))
             .unwrap()
@@ -601,7 +668,7 @@ impl GameOfLife {
     }
 }
 
-impl Default for GameOfLife {
+impl Default for MainApp {
     fn default() -> Self {
         Self::new()
     }
