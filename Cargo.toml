@@ -15,3 +15,10 @@ tracing-subscriber = "0.3"
 zune-image = {version = "0.4.15", features = ["all"]}
 [profile.dev.package.zune-jpeg]
 opt-level = 3
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "image_load"
+harness = false

@@ -3,7 +3,7 @@
 // use grid::Grid;
 
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::{self};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{self, Duration};
@@ -15,9 +15,10 @@ use iced::widget::image::FilterMethod;
 use iced::widget::{
     Column, Container, button, center, checkbox, column, container, pick_list, row, slider, text,
 };
-use iced::{Center, Element, Fill, Length, Size, Subscription, Task, Theme};
+use iced::{Center, Element, Fill, Length, Size, Subscription, Task, Theme, keyboard};
 use image::{self, DynamicImage, EncodableLayout, ImageBuffer, ImageReader};
-use itertools::Itertools;
+
+use imflow::image::{Approach, load_thumbnail};
 use zune_image::codecs::qoi::zune_core::options::DecoderOptions; // for general image operations
 // use image::io::Reader as ImageReader; // specifically for Reader
 
@@ -144,7 +145,7 @@ impl GameOfLife {
                 if !self.loaded_images.contains_key(&path.to_path_buf()) {
                     self.loaded_images.insert(
                         path.to_path_buf(),
-                        load_thumbnail(path.to_str().unwrap()).unwrap(),
+                        load_thumbnail(path.to_str().unwrap(), Approach::Iced).unwrap(),
                     );
                 }
             }
@@ -154,12 +155,11 @@ impl GameOfLife {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        if self.is_playing {
-            iced::time::every(Duration::from_millis(1000 / self.speed as u64))
-                .map(|_| Message::Tick)
-        } else {
-            Subscription::none()
-        }
+        keyboard::on_key_press(|key, _modifiers| match key {
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(Message::Next(1)),
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some(Message::Next(-1)),
+            _ => None,
+        })
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -277,50 +277,4 @@ fn view_controls<'a>(
     .spacing(20)
     .align_y(Center)
     .into()
-}
-
-fn load_thumbnail(path: &str) -> Result<iced::widget::image::Handle, String> {
-    // let file = File::open(path).map_err(|e| e.to_string())?;
-    // let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(|e| e.to_string())?;
-    // println!("mapped file");
-    // let img = zune_image::image::Image::read(&*mmap, DecoderOptions::default()).unwrap();
-    let img = zune_image::image::Image::open_with_options(path, DecoderOptions::default()).unwrap();
-    // let img = image::load_from_memory(&mmap)
-    // .map_err(|e| e.to_string())?
-    // .decode()
-    // .map_err(|e| e.to_string())?;
-
-    // let thumbnail = img.thumbnail(128, 128);
-    let width = img.dimensions().0 as u32;
-    let height = img.dimensions().1 as u32;
-    println!("loaded");
-    let flat = img.flatten_to_u8();
-    println!("flattened");
-    let rgba = convert_rgb_to_rgba(flat);
-    println!("rgbad");
-    // let leaked_slice = Box::leak(rgba[0].clone().into_boxed_slice());
-    // let slice = rgba[0].as_slice().clone();
-    let conv = iced::widget::image::Handle::from_rgba(
-        width, height, // leaked_slice.as_bytes(),
-        rgba,
-    );
-    println!("iced");
-
-    Ok((conv))
-}
-
-fn convert_rgb_to_rgba(rgb_data: Vec<Vec<u8>>) -> Vec<u8> {
-    let r_channel = &rgb_data[0];
-
-    let num_pixels = r_channel.len() / 3;
-    let mut rgba_data: Vec<u8> = Vec::with_capacity(num_pixels * 4);
-
-    for i in 0..num_pixels {
-        rgba_data.push(r_channel[i * 3]);
-        rgba_data.push(r_channel[i * 3 + 1]);
-        rgba_data.push(r_channel[i * 3 + 2]);
-        rgba_data.push(255); // Fully opaque Alpha value
-    }
-
-    rgba_data
 }
