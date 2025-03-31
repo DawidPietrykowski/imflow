@@ -1,37 +1,19 @@
-//! This example showcases an interactive version of the Game of Life, invented
-//! by John Conway. It leverages a `Canvas` together with other widgets.
-// use grid::Grid;
+// use std::fs::{self};
+// use std::path::{Path, PathBuf};
+// use std::collections::HashMap;
+// use iced::widget::image::FilterMethod;
+// use iced::widget::{
+//     Column, Container, button, center, checkbox, column, container, row, slider, text,
+// };
+// use iced::{Center, Element, Fill, Length, Subscription, Task, keyboard};
 
-use std::cmp::min;
-use std::collections::{HashMap, HashSet};
-use std::fs::{self};
-use std::io::{Cursor, Read};
-use std::ops::Deref;
-use std::path::{Path, PathBuf};
-use std::time::{self, Duration, Instant};
-
-use iced::futures::AsyncReadExt;
-use iced::widget::shader::wgpu::core::command::LoadOp;
-// use iced::time::milliseconds;
-use iced::widget::image::FilterMethod;
-use iced::widget::{
-    Column, Container, button, center, checkbox, column, container, pick_list, row, slider, text,
-};
-use iced::{Center, Element, Fill, Length, Size, Subscription, Task, Theme, keyboard};
-use image::{self, DynamicImage, EncodableLayout, GenericImageView, ImageBuffer, ImageReader};
+use std::path::PathBuf;
 
 use clap::Parser;
-use imflow::image::{
-    Approach, ImflowImageBuffer, flatten_image_image, flatten_zune_image, get_embedded_thumbnail,
-    load_available_images, load_image_argb, load_image_argb_imagers, load_thumbnail, map_file,
-    map_file_path, read_zune_image,
-};
 use minifb::{Key, Window, WindowOptions};
-use threadpool::ThreadPool;
-use zune_image::codecs::qoi::zune_core::options::DecoderOptions; // for general image operations
-// use image::io::Reader as ImageReader; // specifically for Reader
 
-use std::sync::{Arc, mpsc};
+use imflow::image::ImflowImageBuffer;
+use imflow::store::ImageStore;
 
 // use winit::{
 //     application::ApplicationHandler,
@@ -333,200 +315,6 @@ use std::sync::{Arc, mpsc};
 // }
 //
 
-struct State {
-    current_image_id: usize,
-    loaded_images: HashMap<PathBuf, ImflowImageBuffer>,
-    loaded_images_thumbnails: HashMap<PathBuf, ImflowImageBuffer>,
-    available_images: Vec<PathBuf>,
-    current_image_path: PathBuf,
-    pool: ThreadPool,
-    loader_rx: mpsc::Receiver<(PathBuf, ImflowImageBuffer)>,
-    loader_tx: mpsc::Sender<(PathBuf, ImflowImageBuffer)>,
-    currently_loading: HashSet<PathBuf>, // Track what's being loaded
-}
-
-impl State {
-    fn new(path: PathBuf) -> Self {
-        let current_image_id: usize = 0;
-        let mut loaded_images: HashMap<PathBuf, ImflowImageBuffer> = HashMap::new();
-        let mut loaded_thumbnails: HashMap<PathBuf, ImflowImageBuffer> = HashMap::new();
-        let available_images = load_available_images(path);
-        let new_path = available_images[0].clone();
-        // let current_image = load_image_argb_imagers(new_path.clone());
-        // let current_image = load_image_argb_imagers(new_path.clone());
-        // loaded_images.insert(new_path.clone(), current_image);
-
-        let (loader_tx, loader_rx) = mpsc::channel();
-
-        let pool = ThreadPool::new(32);
-
-        let currently_loading = HashSet::new();
-
-        let total_start = Instant::now();
-        let mut loaded = 0;
-        let to_load = available_images.len();
-        for path in &available_images {
-            if let Some(thumbnail) = get_embedded_thumbnail(path.clone()) {
-                let decoder = image::ImageReader::new(Cursor::new(thumbnail))
-                    .with_guessed_format()
-                    .unwrap();
-                let image = decoder.decode().unwrap();
-
-                let width: usize = image.width() as usize;
-                let height: usize = image.height() as usize;
-                let mut flat = image.into_rgba8().into_raw();
-                let mut buffer: Vec<u32> = vec![0; width * height];
-
-                for (rgba, argb) in flat.chunks_mut(4).zip(buffer.iter_mut()) {
-                    let r = rgba[0] as u32;
-                    let g = rgba[1] as u32;
-                    let b = rgba[2] as u32;
-                    *argb = r << 16 | g << 8 | b;
-                }
-
-                let buf = ImflowImageBuffer {
-                    width,
-                    height,
-                    argb_buffer: buffer,
-                };
-
-                loaded_thumbnails.insert(path.clone(), buf);
-                loaded += 1;
-                println!("{}/{}", loaded, to_load);
-            } else {
-                loaded += 1;
-                if !loaded_images.contains_key(&path.clone()) {
-                    let loaded = load_image_argb(path.clone());
-                    loaded_images.insert(path.clone(), loaded);
-                    // self.request_load(new_path.clone());
-                }
-                // let loaded = load_image_argb(path.clone());
-                // loaded_images.get(&path.clone()).unwrap()
-                println!("none for {:?}", path);
-            }
-        }
-        let total_time = total_start.elapsed();
-        println!(
-            "all thumbnails load time: {:?} for {}",
-            total_time,
-            loaded_thumbnails.len()
-        );
-
-        let mut state = Self {
-            current_image_id,
-            loaded_images,
-            available_images,
-            current_image_path: new_path,
-            pool,
-            loader_rx,
-            loader_tx,
-            currently_loading,
-            loaded_images_thumbnails: loaded_thumbnails,
-        };
-
-        // state.preload_next_images(min(state.available_images.len(), 1));
-
-        // let thumbnail_path = state.available_images[0].clone();
-
-        state
-    }
-
-    fn preload_next_images(&mut self, n: usize) {
-        for image in self.available_images.clone().iter().take(n) {
-            self.request_load(image.clone());
-        }
-    }
-
-    fn request_load(&mut self, path: PathBuf) {
-        if self.loaded_images.contains_key(&path) || self.currently_loading.contains(&path) {
-            return;
-        }
-        let tx = self.loader_tx.clone();
-        self.currently_loading.insert(path.clone());
-
-        self.pool.execute(move || {
-            let image = load_image_argb(path.clone());
-            // let image = load_image_argb_imagers(path.clone());
-            let _ = tx.send((path, image));
-        });
-    }
-
-    fn check_loaded_images(&mut self) {
-        while let Ok((path, image)) = self.loader_rx.try_recv() {
-            self.loaded_images.insert(path.clone(), image);
-            self.currently_loading.remove(&path);
-        }
-    }
-
-    fn next_image(&mut self, change: i32) {
-        self.current_image_id = (self.current_image_id as i32 + change)
-            .clamp(0, self.available_images.len() as i32 - 1)
-            as usize;
-        let new_path = self.available_images[self.current_image_id].clone();
-        if !self.loaded_images.contains_key(&new_path) {
-            // self.request_load(new_path.clone());
-        }
-        self.current_image_path = new_path;
-    }
-
-    fn get_current_image(&self) -> Option<&ImflowImageBuffer> {
-        self.loaded_images.get(&self.current_image_path)
-    }
-
-    fn get_thumbnail(&mut self) -> &ImflowImageBuffer {
-        if self
-            .loaded_images_thumbnails
-            .contains_key(&self.current_image_path)
-        {
-            return self
-                .loaded_images_thumbnails
-                .get(&self.current_image_path)
-                .unwrap();
-        }
-
-        let path = &self.current_image_path;
-        if let Some(thumbnail) = get_embedded_thumbnail(path.clone()) {
-            let total_start = Instant::now();
-            let decoder = image::ImageReader::new(Cursor::new(thumbnail))
-                .with_guessed_format()
-                .unwrap();
-            let image = decoder.decode().unwrap();
-
-            let width: usize = image.width() as usize;
-            let height: usize = image.height() as usize;
-            let mut flat = image.into_rgba8().into_raw();
-            let mut buffer: Vec<u32> = vec![0; width * height];
-
-            for (rgba, argb) in flat.chunks_mut(4).zip(buffer.iter_mut()) {
-                let r = rgba[0] as u32;
-                let g = rgba[1] as u32;
-                let b = rgba[2] as u32;
-                *argb = r << 16 | g << 8 | b;
-            }
-
-            let buf = ImflowImageBuffer {
-                width,
-                height,
-                argb_buffer: buffer,
-            };
-            let total_time = total_start.elapsed();
-            println!("thumbnail load time: {:?}", total_time);
-
-            self.loaded_images_thumbnails.insert(path.clone(), buf);
-
-            return self.loaded_images_thumbnails.get(&path.clone()).unwrap();
-        }
-        println!("skipping {:?}", path);
-        if !self.loaded_images.contains_key(&path.clone()) {
-            let loaded = load_image_argb(path.clone());
-            self.loaded_images.insert(path.clone(), loaded);
-            // self.request_load(new_path.clone());
-        }
-        // let loaded = load_image_argb(path.clone());
-        self.loaded_images.get(&path.clone()).unwrap()
-    }
-}
-
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -550,8 +338,8 @@ fn main() {
     window.set_target_fps(120);
 
     let path = args.path.unwrap_or("./test_images".into());
-    let mut state = State::new(path);
-    let mut waiting = false;
+    let mut state = ImageStore::new(path);
+    let mut waiting = true;
     window.set_key_repeat_delay(0.1);
     window.set_key_repeat_rate(0.1);
 
@@ -560,22 +348,30 @@ fn main() {
     while window.is_open() && !window.is_key_down(Key::Escape) {
         window.update();
         state.check_loaded_images();
-        if !waiting && window.is_key_pressed(Key::Right, minifb::KeyRepeat::Yes) {
+        if window.is_key_pressed(Key::Right, minifb::KeyRepeat::Yes) {
             state.next_image(1);
-            show_image(&mut window, state.get_thumbnail());
-            // waiting = true;
-        } else if !waiting && window.is_key_pressed(Key::Left, minifb::KeyRepeat::Yes) {
+            if let Some(full) = state.get_current_image() {
+                show_image(&mut window, full);
+            } else {
+                show_image(&mut window, state.get_thumbnail());
+                waiting = true;
+            }
+        } else if window.is_key_pressed(Key::Left, minifb::KeyRepeat::Yes) {
             state.next_image(-1);
-            show_image(&mut window, state.get_thumbnail());
-            // waiting = true;
+            if let Some(full) = state.get_current_image() {
+                show_image(&mut window, full);
+            } else {
+                show_image(&mut window, state.get_thumbnail());
+                waiting = true;
+            }
         }
-        // if waiting {
-        //     if let Some(image) = state.get_current_image() {
-        //         waiting = false;
+        if waiting {
+            if let Some(image) = state.get_current_image() {
+                waiting = false;
 
-        //         show_image(&mut window, &image);
-        //     }
-        // }
+                show_image(&mut window, &image);
+            }
+        }
     }
 }
 
@@ -585,247 +381,247 @@ fn show_image(window: &mut Window, image: &ImflowImageBuffer) {
         .unwrap();
 }
 
-struct MainApp {
-    is_playing: bool,
-    queued_ticks: usize,
-    speed: usize,
-    next_speed: Option<usize>,
-    version: usize,
-    image_filter_method: FilterMethod,
-    current_image: Option<PathBuf>,
-    width: u32,
-    available_images: Vec<PathBuf>,
-    current_image_id: usize,
-    loaded_images: HashMap<PathBuf, iced::widget::image::Handle>,
-}
+// struct MainApp {
+//     is_playing: bool,
+//     queued_ticks: usize,
+//     speed: usize,
+//     next_speed: Option<usize>,
+//     version: usize,
+//     image_filter_method: FilterMethod,
+//     current_image: Option<PathBuf>,
+//     width: u32,
+//     available_images: Vec<PathBuf>,
+//     current_image_id: usize,
+//     loaded_images: HashMap<PathBuf, iced::widget::image::Handle>,
+// }
 
-#[derive(Debug, Clone)]
-enum Message {
-    TogglePlayback,
-    ToggleGrid(bool),
-    Clear,
-    SpeedChanged(f32),
-    Tick,
-    Next(i32),
-    ImageWidthChanged(u32),
-    ImageUseNearestToggled(bool),
-}
+// #[derive(Debug, Clone)]
+// enum Message {
+//     TogglePlayback,
+//     ToggleGrid(bool),
+//     Clear,
+//     SpeedChanged(f32),
+//     Tick,
+//     Next(i32),
+//     ImageWidthChanged(u32),
+//     ImageUseNearestToggled(bool),
+// }
 
-impl MainApp {
-    fn new() -> Self {
-        let mut dir: Vec<PathBuf> = fs::read_dir(Path::new("./test_images"))
-            .unwrap()
-            .map(|f| f.unwrap().path())
-            .collect();
-        dir.sort();
-        let mut res = Self {
-            is_playing: false,
-            queued_ticks: 0,
-            speed: 5,
-            next_speed: None,
-            version: 0,
-            image_filter_method: FilterMethod::Nearest,
-            width: 1400,
-            current_image: Some(dir.first().unwrap().clone()),
-            available_images: dir,
-            current_image_id: 0,
-            loaded_images: HashMap::new(),
-        };
-        let _ = res.update(Message::Next(0));
-        res
-    }
+// impl MainApp {
+//     fn new() -> Self {
+//         let mut dir: Vec<PathBuf> = fs::read_dir(Path::new("./test_images"))
+//             .unwrap()
+//             .map(|f| f.unwrap().path())
+//             .collect();
+//         dir.sort();
+//         let mut res = Self {
+//             is_playing: false,
+//             queued_ticks: 0,
+//             speed: 5,
+//             next_speed: None,
+//             version: 0,
+//             image_filter_method: FilterMethod::Nearest,
+//             width: 1400,
+//             current_image: Some(dir.first().unwrap().clone()),
+//             available_images: dir,
+//             current_image_id: 0,
+//             loaded_images: HashMap::new(),
+//         };
+//         let _ = res.update(Message::Next(0));
+//         res
+//     }
 
-    fn update(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::Tick => {
-                self.queued_ticks = (self.queued_ticks + 1).min(self.speed);
+//     fn update(&mut self, message: Message) -> Task<Message> {
+//         match message {
+//             Message::Tick => {
+//                 self.queued_ticks = (self.queued_ticks + 1).min(self.speed);
 
-                // if let Some(task) = self.grid.tick(self.queued_ticks) {
-                //     if let Some(speed) = self.next_speed.take() {
-                //         self.speed = speed;
-                //     }
+//                 // if let Some(task) = self.grid.tick(self.queued_ticks) {
+//                 //     if let Some(speed) = self.next_speed.take() {
+//                 //         self.speed = speed;
+//                 //     }
 
-                //     self.queued_ticks = 0;
+//                 //     self.queued_ticks = 0;
 
-                //     let version = self.version;
+//                 //     let version = self.version;
 
-                //     // return Task::perform(task, Message::Grid.with(version));
-                // }
-            }
-            Message::TogglePlayback => {
-                self.is_playing = !self.is_playing;
-            }
-            Message::ToggleGrid(show_grid_lines) => {
-                // self.grid.toggle_lines(show_grid_lines);
-            }
-            Message::Clear => {
-                // self.grid.clear();
-                self.version += 1;
-            }
-            Message::SpeedChanged(speed) => {
-                if self.is_playing {
-                    self.next_speed = Some(speed.round() as usize);
-                } else {
-                    self.speed = speed.round() as usize;
-                }
-            }
-            Message::ImageWidthChanged(image_width) => {
-                self.width = image_width;
-            }
-            Message::ImageUseNearestToggled(use_nearest) => {
-                self.image_filter_method = if use_nearest {
-                    FilterMethod::Nearest
-                } else {
-                    FilterMethod::Linear
-                };
-            }
-            Message::Next(change) => {
-                let elements = self.available_images.len() as i32;
-                let new_id = (self.current_image_id as i32 + change).clamp(0, elements - 1);
-                println!(
-                    "updated id: {} from {} total {}",
-                    new_id, self.current_image_id, elements
-                );
-                self.current_image_id = new_id as usize;
-                let path = self
-                    .available_images
-                    .get(self.current_image_id)
-                    .unwrap()
-                    .clone();
-                self.current_image = Some(path.clone());
-                if !self.loaded_images.contains_key(&path.to_path_buf()) {
-                    // self.loaded_images.insert(
-                    //     path.to_path_buf(),
-                    //     load_thumbnail(path.to_str().unwrap(), Approach::ImageRs).unwrap(),
-                    // );
-                }
-            }
-        }
+//                 //     // return Task::perform(task, Message::Grid.with(version));
+//                 // }
+//             }
+//             Message::TogglePlayback => {
+//                 self.is_playing = !self.is_playing;
+//             }
+//             Message::ToggleGrid(show_grid_lines) => {
+//                 // self.grid.toggle_lines(show_grid_lines);
+//             }
+//             Message::Clear => {
+//                 // self.grid.clear();
+//                 self.version += 1;
+//             }
+//             Message::SpeedChanged(speed) => {
+//                 if self.is_playing {
+//                     self.next_speed = Some(speed.round() as usize);
+//                 } else {
+//                     self.speed = speed.round() as usize;
+//                 }
+//             }
+//             Message::ImageWidthChanged(image_width) => {
+//                 self.width = image_width;
+//             }
+//             Message::ImageUseNearestToggled(use_nearest) => {
+//                 self.image_filter_method = if use_nearest {
+//                     FilterMethod::Nearest
+//                 } else {
+//                     FilterMethod::Linear
+//                 };
+//             }
+//             Message::Next(change) => {
+//                 let elements = self.available_images.len() as i32;
+//                 let new_id = (self.current_image_id as i32 + change).clamp(0, elements - 1);
+//                 println!(
+//                     "updated id: {} from {} total {}",
+//                     new_id, self.current_image_id, elements
+//                 );
+//                 self.current_image_id = new_id as usize;
+//                 let path = self
+//                     .available_images
+//                     .get(self.current_image_id)
+//                     .unwrap()
+//                     .clone();
+//                 self.current_image = Some(path.clone());
+//                 if !self.loaded_images.contains_key(&path.to_path_buf()) {
+//                     // self.loaded_images.insert(
+//                     //     path.to_path_buf(),
+//                     //     load_thumbnail(path.to_str().unwrap(), Approach::ImageRs).unwrap(),
+//                     // );
+//                 }
+//             }
+//         }
 
-        Task::none()
-    }
+//         Task::none()
+//     }
 
-    fn subscription(&self) -> Subscription<Message> {
-        keyboard::on_key_press(|key, _modifiers| match key {
-            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(Message::Next(1)),
-            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some(Message::Next(-1)),
-            _ => None,
-        })
-    }
+//     fn subscription(&self) -> Subscription<Message> {
+//         keyboard::on_key_press(|key, _modifiers| match key {
+//             keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(Message::Next(1)),
+//             keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some(Message::Next(-1)),
+//             _ => None,
+//         })
+//     }
 
-    fn view(&self) -> Element<'_, Message> {
-        let version = self.version;
-        let selected_speed = self.next_speed.unwrap_or(self.speed);
-        let controls = view_controls(
-            self.is_playing,
-            true,
-            // self.grid.are_lines_visible(),
-            selected_speed,
-            // self.grid.preset(),
-        );
+//     fn view(&self) -> Element<'_, Message> {
+//         let version = self.version;
+//         let selected_speed = self.next_speed.unwrap_or(self.speed);
+//         let controls = view_controls(
+//             self.is_playing,
+//             true,
+//             // self.grid.are_lines_visible(),
+//             selected_speed,
+//             // self.grid.preset(),
+//         );
 
-        let content = column![
-            // image("/media/nfs/sphotos/Images/24-08-11-Copenhagen/24-08-12/20240812-175614_DSC03844.JPG").into(),
-            // self.grid.view().map(Message::Grid.with(version)),
-            self.image(),
-            controls,
-        ]
-        .height(Fill);
+//         let content = column![
+//             // image("/media/nfs/sphotos/Images/24-08-11-Copenhagen/24-08-12/20240812-175614_DSC03844.JPG").into(),
+//             // self.grid.view().map(Message::Grid.with(version)),
+//             self.image(),
+//             controls,
+//         ]
+//         .height(Fill);
 
-        container(content).width(Fill).height(Fill).into()
-        // image("/media/nfs/sphotos/Images/24-08-11-Copenhagen/24-08-12/20240812-175614_DSC03844.JPG").into()
-    }
+//         container(content).width(Fill).height(Fill).into()
+//         // image("/media/nfs/sphotos/Images/24-08-11-Copenhagen/24-08-12/20240812-175614_DSC03844.JPG").into()
+//     }
 
-    fn image(&self) -> Column<Message> {
-        let width = self.width;
-        let filter_method = self.image_filter_method;
+//     fn image(&self) -> Column<Message> {
+//         let width = self.width;
+//         let filter_method = self.image_filter_method;
 
-        Self::container("Image")
-            .push("An image that tries to keep its aspect ratio.")
-            .push(self.ferris(
-                width,
-                filter_method,
-                self.current_image.as_ref().unwrap().as_ref(),
-            ))
-            .push(slider(100..=1500, width, Message::ImageWidthChanged))
-            .push(text!("Width: {width} px").width(Fill).align_x(Center))
-            .push(
-                checkbox(
-                    "Use nearest interpolation",
-                    filter_method == FilterMethod::Nearest,
-                )
-                .on_toggle(Message::ImageUseNearestToggled),
-            )
-            .align_x(Center)
-    }
+//         Self::container("Image")
+//             .push("An image that tries to keep its aspect ratio.")
+//             .push(self.ferris(
+//                 width,
+//                 filter_method,
+//                 self.current_image.as_ref().unwrap().as_ref(),
+//             ))
+//             .push(slider(100..=1500, width, Message::ImageWidthChanged))
+//             .push(text!("Width: {width} px").width(Fill).align_x(Center))
+//             .push(
+//                 checkbox(
+//                     "Use nearest interpolation",
+//                     filter_method == FilterMethod::Nearest,
+//                 )
+//                 .on_toggle(Message::ImageUseNearestToggled),
+//             )
+//             .align_x(Center)
+//     }
 
-    fn container(title: &str) -> Column<'_, Message> {
-        column![text(title).size(50)].spacing(20)
-    }
+//     fn container(title: &str) -> Column<'_, Message> {
+//         column![text(title).size(50)].spacing(20)
+//     }
 
-    fn ferris<'a>(
-        &self,
-        width: u32,
-        filter_method: iced::widget::image::FilterMethod,
-        path: &Path,
-    ) -> Container<'a, Message> {
-        if self.loaded_images.get(path).is_none() {
-            return center(text("loading"));
-        }
-        let img = iced::widget::image::Image::new(self.loaded_images.get(path).unwrap());
-        center(
-            // This should go away once we unify resource loading on native
-            // platforms
-            img.filter_method(filter_method)
-                .width(Length::Fixed(width as f32)),
-        )
-    }
-}
+//     fn ferris<'a>(
+//         &self,
+//         width: u32,
+//         filter_method: iced::widget::image::FilterMethod,
+//         path: &Path,
+//     ) -> Container<'a, Message> {
+//         if self.loaded_images.get(path).is_none() {
+//             return center(text("loading"));
+//         }
+//         let img = iced::widget::image::Image::new(self.loaded_images.get(path).unwrap());
+//         center(
+//             // This should go away once we unify resource loading on native
+//             // platforms
+//             img.filter_method(filter_method)
+//                 .width(Length::Fixed(width as f32)),
+//         )
+//     }
+// }
 
-impl Default for MainApp {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// impl Default for MainApp {
+//     fn default() -> Self {
+//         Self::new()
+//     }
+// }
 
-fn view_controls<'a>(
-    is_playing: bool,
-    is_grid_enabled: bool,
-    speed: usize,
-    // preset: Preset,
-) -> Element<'a, Message> {
-    let playback_controls = row![
-        button(if is_playing { "Pause" } else { "Play" }).on_press(Message::TogglePlayback),
-        button("Previous")
-            .on_press(Message::Next(-1))
-            .style(button::secondary),
-        button("Next")
-            .on_press(Message::Next(1))
-            .style(button::secondary),
-    ]
-    .spacing(10);
+// fn view_controls<'a>(
+//     is_playing: bool,
+//     is_grid_enabled: bool,
+//     speed: usize,
+//     // preset: Preset,
+// ) -> Element<'a, Message> {
+//     let playback_controls = row![
+//         button(if is_playing { "Pause" } else { "Play" }).on_press(Message::TogglePlayback),
+//         button("Previous")
+//             .on_press(Message::Next(-1))
+//             .style(button::secondary),
+//         button("Next")
+//             .on_press(Message::Next(1))
+//             .style(button::secondary),
+//     ]
+//     .spacing(10);
 
-    let speed_controls = row![
-        slider(1.0..=1000.0, speed as f32, Message::SpeedChanged),
-        text!("x{speed}").size(16),
-    ]
-    .align_y(Center)
-    .spacing(10);
+//     let speed_controls = row![
+//         slider(1.0..=1000.0, speed as f32, Message::SpeedChanged),
+//         text!("x{speed}").size(16),
+//     ]
+//     .align_y(Center)
+//     .spacing(10);
 
-    row![
-        playback_controls,
-        speed_controls,
-        // checkbox("Grid", is_grid_enabled).on_toggle(Message::ToggleGrid),
-        // row![
-        //     pick_list(preset::ALL, Some(preset), Message::PresetPicked),
-        //     button("Clear")
-        //         .on_press(Message::Clear)
-        //         .style(button::danger)
-        // ]
-        // .spacing(10)
-    ]
-    .padding(10)
-    .spacing(20)
-    .align_y(Center)
-    .into()
-}
+//     row![
+//         playback_controls,
+//         speed_controls,
+//         // checkbox("Grid", is_grid_enabled).on_toggle(Message::ToggleGrid),
+//         // row![
+//         //     pick_list(preset::ALL, Some(preset), Message::PresetPicked),
+//         //     button("Clear")
+//         //         .on_press(Message::Clear)
+//         //         .style(button::danger)
+//         // ]
+//         // .spacing(10)
+//     ]
+//     .padding(10)
+//     .spacing(20)
+//     .align_y(Center)
+//     .into()
+// }
