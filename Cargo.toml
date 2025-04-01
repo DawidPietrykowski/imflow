@@ -5,6 +5,9 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.5.34", features = ["derive"] }
+eframe = "0.31.1"
+egui = "0.31.1"
+egui_extras = { version = "0.31.1", features = ["all_loaders"] }
 env_logger = "0.11.7"
 iced = { version = "0.13.1", features = ["debug", "canvas", "tokio", "image"]}
 image = "0.25.6"

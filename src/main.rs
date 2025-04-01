@@ -314,6 +314,46 @@ use imflow::store::ImageStore;
 //     event_loop.run_app(&mut app).unwrap();
 // }
 //
+use eframe::egui;
+use egui::{ColorImage, Image, TextureHandle, TextureOptions};
+
+struct MyApp {
+    // image: Image,
+    store: ImageStore,
+    texture: TextureHandle,
+}
+
+impl MyApp {
+    fn new(store: ImageStore, texture: TextureHandle) -> Self {
+        Self {
+            store,
+            texture,
+        }
+    }
+}
+
+impl eframe::App for MyApp {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // let img = Image::from_bytes("bytes://", buffer_u8);
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("This is an image:");
+            // image::show(ui);
+            // ui.add(img);
+            // ui.textu
+            ui.image(&self.texture);
+            // if ui.add(egui::ImageButton::new(&self.texture)).clicked() {
+            //     // Handle click
+            // }
+            // img.
+
+            // ui.heading("This is an image you can click:");
+            // ui.add(egui::ImageButton::new(
+            //     self.image.texture_id(ctx),
+            //     self.image.size_vec2(),
+            // ));
+        });
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -322,6 +362,46 @@ struct Args {
 }
 
 fn main() {
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size((400.0, 400.0)),
+        ..eframe::NativeOptions::default()
+    };
+
+    eframe::run_native(
+        "aaa",
+        native_options,
+        Box::new(|cc| {
+            // Initialize image loaders
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+            let mut store = ImageStore::new("./test_images".into());
+
+            let mut imbuf = store.get_current_image().unwrap();
+
+            let width = imbuf.width;
+            let height = imbuf.height;
+
+            let mut buffer = imbuf.argb_buffer.clone();
+            // Reinterpret to avoid copying
+            let buffer_u8 = unsafe {
+                Vec::from_raw_parts(
+                    buffer.as_mut_ptr() as *mut u8,
+                    buffer.len() * 4,
+                    buffer.capacity() * 4,
+                )
+            };
+            std::mem::forget(buffer);
+
+            let color_image = ColorImage::from_rgba_unmultiplied([width, height], &buffer_u8);
+            let texture = cc
+                .egui_ctx
+                .load_texture("img", color_image, TextureOptions::LINEAR);
+
+            Ok(Box::new(MyApp::new(store, texture)))
+        }),
+    )
+    .unwrap();
+    // eframe::run_native(Box::new(MyApp::default()), options);
+
     let args = Args::parse();
     const WIDTH: usize = 2000;
     const HEIGHT: usize = 1000;

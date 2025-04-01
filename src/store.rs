@@ -26,7 +26,7 @@ pub struct ImageStore {
 impl ImageStore {
     pub fn new(path: PathBuf) -> Self {
         let current_image_id: usize = 0;
-        let loaded_images: HashMap<PathBuf, ImflowImageBuffer> = HashMap::new();
+        let mut loaded_images: HashMap<PathBuf, ImflowImageBuffer> = HashMap::new();
         let mut loaded_thumbnails: HashMap<PathBuf, ImflowImageBuffer> = HashMap::new();
         let available_images = load_available_images(path);
         let new_path = available_images[0].clone();
@@ -53,6 +53,9 @@ impl ImageStore {
             loaded_thumbnails.len()
         );
 
+        let path = available_images[0].clone();
+        let image = load_image(path.clone());
+        loaded_images.insert(path, image);
         let mut state = Self {
             current_image_id,
             loaded_images,
