@@ -1,6 +1,7 @@
 use iced::widget::image::Handle;
 use image::DynamicImage;
 use image::imageops::FilterType;
+use rexiv2::Metadata;
 use zune_image::codecs::jpeg::JpegDecoder;
 use zune_image::codecs::qoi::zune_core::colorspace::ColorSpace;
 use zune_image::codecs::qoi::zune_core::options::DecoderOptions;
@@ -17,16 +18,38 @@ pub struct ImflowImageBuffer {
     pub width: usize,
     pub height: usize,
     pub argb_buffer: Vec<u32>,
+    pub rating: i32
 }
 
 pub fn create_iced_handle(width: u32, height: u32, rgba: Vec<u8>) -> Handle {
     Handle::from_rgba(width, height, rgba)
 }
 
+fn get_rating(filename: PathBuf) -> i32 {
+    // if !path_exists(filename.clone()) {
+    //     anyhow::bail!("File doesn't exist");
+    // }
+
+    // // Use xmp-toolkit for video files
+    // if is_video(&filename) {
+    //     return Ok(read_rating_xmp(filename.clone()).unwrap_or(0));
+    // }
+
+    // Use rexiv2 for image files
+    let meta = Metadata::new_from_path(filename);
+    match meta {
+        Ok(meta) => {
+            let rating = meta.get_tag_numeric("Xmp.xmp.Rating");
+            rating
+        }
+        Err(e) => panic!("{:?}", e),
+    }
+}
+
 pub fn load_image(path: PathBuf) -> ImflowImageBuffer {
     let total_start = Instant::now();
 
-    let file = read(path).unwrap();
+    let file = read(path.clone()).unwrap();
     let mut decoder = JpegDecoder::new(&file);
     let options = DecoderOptions::new_fast().jpeg_set_out_colorspace(ColorSpace::BGRA);
     decoder.set_options(options);
@@ -52,10 +75,13 @@ pub fn load_image(path: PathBuf) -> ImflowImageBuffer {
     let total_time = total_start.elapsed();
     println!("Total loading time: {:?}", total_time);
 
+    let rating = get_rating(path);
+
     ImflowImageBuffer {
         width,
         height,
         argb_buffer: buffer_u32,
+        rating
     }
 }
 
@@ -63,12 +89,14 @@ pub fn image_to_argb_buffer(img: DynamicImage) -> Vec<u32> {
     let flat = img.into_rgba8();
     let buf = flat.as_raw();
 
-    buf.chunks_exact(4).map(|rgba| {
-        let r = rgba[0] as u32;
-        let g = rgba[1] as u32;
-        let b = rgba[2] as u32;
-        r << 16 | g << 8 | b
-    }).collect()
+    buf.chunks_exact(4)
+        .map(|rgba| {
+            let r = rgba[0] as u32;
+            let g = rgba[1] as u32;
+            let b = rgba[2] as u32;
+            r << 16 | g << 8 | b
+        })
+        .collect()
 }
 
 pub fn load_available_images(dir: PathBuf) -> Vec<PathBuf> {
@@ -121,10 +149,13 @@ pub fn load_thumbnail_exif(path: &PathBuf) -> Option<ImflowImageBuffer> {
                 *argb = r << 16 | g << 8 | b;
             }
 
+            let rating = get_rating(path.into());
+
             Some(ImflowImageBuffer {
                 width,
                 height,
                 argb_buffer: buffer,
+                rating
             })
         }
         _ => None,
@@ -143,10 +174,12 @@ pub fn load_thumbnail_full(path: &PathBuf) -> ImflowImageBuffer {
     let width = image.width() as usize;
     let height = image.height() as usize;
     let buffer = image_to_argb_buffer(image);
+    let rating = get_rating(path.into());
 
     ImflowImageBuffer {
         width,
         height,
         argb_buffer: buffer,
+        rating
     }
 }

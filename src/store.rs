@@ -1,7 +1,6 @@
 use crate::image::load_thumbnail;
-use crate::image::{
-    ImflowImageBuffer, load_available_images, load_image,
-};
+use crate::image::{ImflowImageBuffer, load_available_images, load_image};
+use rexiv2::Metadata;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -71,6 +70,36 @@ impl ImageStore {
         state.preload_next_images(PRELOAD_NEXT_IMAGE_N);
 
         state
+    }
+
+    pub fn set_rating(&mut self, rating: i32) {
+        let meta = Metadata::new_from_path(self.current_image_path.clone());
+        match meta {
+            Ok(meta) => {
+                meta.set_tag_numeric("Xmp.xmp.Rating", rating).unwrap();
+                meta.save_to_file(self.current_image_path.clone()).unwrap();
+            }
+            Err(e) => panic!("{:?}", e),
+        }
+        if let Some(full) = self.loaded_images.get_mut(&self.current_image_path.clone()) {
+            full.rating = rating;
+        }
+        if let Some(thumbnail) = self.loaded_images_thumbnails.get_mut(&self.current_image_path.clone()) {
+            thumbnail.rating = rating;
+        }
+    }
+
+    pub fn get_current_rating(&self) -> i32 {
+        let imbuf = if let Some(full) = self.get_current_image() {
+            println!("full");
+            full
+        } else {
+            // TODO: this assumes loaded thumbnail
+            self.loaded_images_thumbnails
+                .get(&self.current_image_path)
+                .unwrap()
+        };
+        imbuf.rating
     }
 
     pub fn preload_next_images(&mut self, n: usize) {

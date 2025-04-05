@@ -4,10 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+egui = "0.31.1"
+egui-wgpu = { version = "0.31.1",features = ["winit"] }
+egui-winit = "0.31.1"
+winit = "0.30.9"
+pollster = "0.4.0"
+
 clap = { version = "4.5.34", features = ["derive"] }
 eframe = "0.31.1"
-egui = "0.31.1"
-egui_extras = { version = "0.31.1", features = ["all_loaders"] }
+# egui = "0.31.1"
+# egui_extras = { version = "0.31.1", features = ["all_loaders"] }
 env_logger = "0.11.7"
 iced = { version = "0.13.1", features = ["debug", "canvas", "tokio", "image"]}
 image = "0.25.6"
@@ -15,15 +21,16 @@ image = "0.25.6"
 itertools = "0.12"
 memmap2 = "0.9.5"
 minifb = "0.28.0"
-pollster = "0.4.0"
+# pollster = "0.4.0"
 rexiv2 = "0.10.0"
 threadpool = "1.8.1"
 # rustc-hash.workspace = true
 tokio = { version = "1.44.1", features = ["sync"] }
 tracing-subscriber = "0.3"
 wgpu = "24.0.3"
-winit = "0.30.9"
+# winit = "0.30.9"
 zune-image = {version = "0.4.15", features = ["all"]}
+bytemuck = "1.22.0"
 [profile.release]
 opt-level = 3
 debug = false

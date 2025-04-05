@@ -317,6 +317,66 @@ use imflow::store::ImageStore;
 use eframe::egui;
 use egui::{ColorImage, Image, TextureHandle, TextureOptions};
 
+mod app;
+mod egui_tools;
+
+use winit::event_loop::{ControlFlow, EventLoop};
+
+fn main() {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        pollster::block_on(run());
+    }
+}
+
+async fn run() {
+    let event_loop = EventLoop::new().unwrap();
+
+    event_loop.set_control_flow(ControlFlow::Poll);
+
+    let mut app = app::App::new();
+
+    event_loop.run_app(&mut app).expect("Failed to run app");
+
+    // let path = args.path.unwrap_or("./test_images".into());
+    // let mut state = ImageStore::new(path);
+    // let mut waiting = true;
+    // window.set_key_repeat_delay(0.1);
+    // window.set_key_repeat_rate(0.1);
+
+    // show_image(&mut window, state.get_thumbnail());
+
+    // while window.is_open() && !window.is_key_down(Key::Escape) {
+    //     window.update();
+    //     state.check_loaded_images();
+    //     if window.is_key_pressed(Key::Right, minifb::KeyRepeat::Yes) {
+    //         state.next_image(1);
+    //         if let Some(full) = state.get_current_image() {
+    //             show_image(&mut window, full);
+    //         } else {
+    //             show_image(&mut window, state.get_thumbnail());
+    //             waiting = true;
+    //         }
+    //     } else if window.is_key_pressed(Key::Left, minifb::KeyRepeat::Yes) {
+    //         state.next_image(-1);
+    //         if let Some(full) = state.get_current_image() {
+    //             show_image(&mut window, full);
+    //         } else {
+    //             show_image(&mut window, state.get_thumbnail());
+    //             waiting = true;
+    //         }
+    //     }
+    //     if waiting {
+    //         if let Some(image) = state.get_current_image() {
+    //             waiting = false;
+
+    //             show_image(&mut window, &image);
+    //         }
+    //     }
+    // }
+}
+
+
 struct MyApp {
     // image: Image,
     store: ImageStore,
@@ -361,105 +421,133 @@ struct Args {
     path: Option<PathBuf>,
 }
 
-fn main() {
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size((400.0, 400.0)),
-        ..eframe::NativeOptions::default()
-    };
+// fn init_app() {
+    
+//             let mut store = ImageStore::new("./test_images".into());
 
-    eframe::run_native(
-        "aaa",
-        native_options,
-        Box::new(|cc| {
-            // Initialize image loaders
-            egui_extras::install_image_loaders(&cc.egui_ctx);
-            let mut store = ImageStore::new("./test_images".into());
+//             let mut imbuf = store.get_current_image().unwrap();
 
-            let mut imbuf = store.get_current_image().unwrap();
+//             let width = imbuf.width;
+//             let height = imbuf.height;
 
-            let width = imbuf.width;
-            let height = imbuf.height;
+//             let mut buffer = imbuf.argb_buffer.clone();
+//             // Reinterpret to avoid copying
+//             let buffer_u8 = unsafe {
+//                 Vec::from_raw_parts(
+//                     buffer.as_mut_ptr() as *mut u8,
+//                     buffer.len() * 4,
+//                     buffer.capacity() * 4,
+//                 )
+//             };
+//             std::mem::forget(buffer);
 
-            let mut buffer = imbuf.argb_buffer.clone();
-            // Reinterpret to avoid copying
-            let buffer_u8 = unsafe {
-                Vec::from_raw_parts(
-                    buffer.as_mut_ptr() as *mut u8,
-                    buffer.len() * 4,
-                    buffer.capacity() * 4,
-                )
-            };
-            std::mem::forget(buffer);
+//             let color_image = ColorImage::from_rgba_unmultiplied([width, height], &buffer_u8);
+//             let texture = cc
+//                 .egui_ctx
+//                 .load_texture("img", color_image, TextureOptions::LINEAR);
 
-            let color_image = ColorImage::from_rgba_unmultiplied([width, height], &buffer_u8);
-            let texture = cc
-                .egui_ctx
-                .load_texture("img", color_image, TextureOptions::LINEAR);
+//             Ok(Box::new(MyApp::new(store, texture)))
+// }
 
-            Ok(Box::new(MyApp::new(store, texture)))
-        }),
-    )
-    .unwrap();
-    // eframe::run_native(Box::new(MyApp::default()), options);
+// fn main() {
+//     let native_options = eframe::NativeOptions {
+//         viewport: egui::ViewportBuilder::default().with_inner_size((400.0, 400.0)),
+//         ..eframe::NativeOptions::default()
+//     };
 
-    let args = Args::parse();
-    const WIDTH: usize = 2000;
-    const HEIGHT: usize = 1000;
-    let mut window = Window::new(
-        "Test - ESC to exit",
-        WIDTH,
-        HEIGHT,
-        WindowOptions::default(),
-    )
-    .unwrap_or_else(|e| {
-        panic!("{}", e);
-    });
+//     eframe::run_native(
+//         "aaa",
+//         native_options,
+//         Box::new(|cc| {
+//             // Initialize image loaders
+//             egui_extras::install_image_loaders(&cc.egui_ctx);
+//             let mut store = ImageStore::new("./test_images".into());
 
-    window.set_target_fps(120);
+//             let mut imbuf = store.get_current_image().unwrap();
 
-    let path = args.path.unwrap_or("./test_images".into());
-    let mut state = ImageStore::new(path);
-    let mut waiting = true;
-    window.set_key_repeat_delay(0.1);
-    window.set_key_repeat_rate(0.1);
+//             let width = imbuf.width;
+//             let height = imbuf.height;
 
-    show_image(&mut window, state.get_thumbnail());
+//             let mut buffer = imbuf.argb_buffer.clone();
+//             // Reinterpret to avoid copying
+//             let buffer_u8 = unsafe {
+//                 Vec::from_raw_parts(
+//                     buffer.as_mut_ptr() as *mut u8,
+//                     buffer.len() * 4,
+//                     buffer.capacity() * 4,
+//                 )
+//             };
+//             std::mem::forget(buffer);
 
-    while window.is_open() && !window.is_key_down(Key::Escape) {
-        window.update();
-        state.check_loaded_images();
-        if window.is_key_pressed(Key::Right, minifb::KeyRepeat::Yes) {
-            state.next_image(1);
-            if let Some(full) = state.get_current_image() {
-                show_image(&mut window, full);
-            } else {
-                show_image(&mut window, state.get_thumbnail());
-                waiting = true;
-            }
-        } else if window.is_key_pressed(Key::Left, minifb::KeyRepeat::Yes) {
-            state.next_image(-1);
-            if let Some(full) = state.get_current_image() {
-                show_image(&mut window, full);
-            } else {
-                show_image(&mut window, state.get_thumbnail());
-                waiting = true;
-            }
-        }
-        if waiting {
-            if let Some(image) = state.get_current_image() {
-                waiting = false;
+//             let color_image = ColorImage::from_rgba_unmultiplied([width, height], &buffer_u8);
+//             let texture = cc
+//                 .egui_ctx
+//                 .load_texture("img", color_image, TextureOptions::LINEAR);
 
-                show_image(&mut window, &image);
-            }
-        }
-    }
-}
+//             Ok(Box::new(MyApp::new(store, texture)))
+//         }),
+//     )
+//     .unwrap();
+//     // eframe::run_native(Box::new(MyApp::default()), options);
 
-fn show_image(window: &mut Window, image: &ImflowImageBuffer) {
-    window
-        .update_with_buffer(&image.argb_buffer, image.width, image.height)
-        .unwrap();
-}
+//     let args = Args::parse();
+//     const WIDTH: usize = 2000;
+//     const HEIGHT: usize = 1000;
+//     let mut window = Window::new(
+//         "Test - ESC to exit",
+//         WIDTH,
+//         HEIGHT,
+//         WindowOptions::default(),
+//     )
+//     .unwrap_or_else(|e| {
+//         panic!("{}", e);
+//     });
+
+//     window.set_target_fps(120);
+
+//     let path = args.path.unwrap_or("./test_images".into());
+//     let mut state = ImageStore::new(path);
+//     let mut waiting = true;
+//     window.set_key_repeat_delay(0.1);
+//     window.set_key_repeat_rate(0.1);
+
+//     show_image(&mut window, state.get_thumbnail());
+
+//     while window.is_open() && !window.is_key_down(Key::Escape) {
+//         window.update();
+//         state.check_loaded_images();
+//         if window.is_key_pressed(Key::Right, minifb::KeyRepeat::Yes) {
+//             state.next_image(1);
+//             if let Some(full) = state.get_current_image() {
+//                 show_image(&mut window, full);
+//             } else {
+//                 show_image(&mut window, state.get_thumbnail());
+//                 waiting = true;
+//             }
+//         } else if window.is_key_pressed(Key::Left, minifb::KeyRepeat::Yes) {
+//             state.next_image(-1);
+//             if let Some(full) = state.get_current_image() {
+//                 show_image(&mut window, full);
+//             } else {
+//                 show_image(&mut window, state.get_thumbnail());
+//                 waiting = true;
+//             }
+//         }
+//         if waiting {
+//             if let Some(image) = state.get_current_image() {
+//                 waiting = false;
+
+//                 show_image(&mut window, &image);
+//             }
+//         }
+//     }
+// }
+
+// fn show_image(window: &mut Window, image: &ImflowImageBuffer) {
+//     window
+//         .update_with_buffer(&image.argb_buffer, image.width, image.height)
+//         .unwrap();
+// }
 
 // struct MainApp {
 //     is_playing: bool,
