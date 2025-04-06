@@ -34,14 +34,16 @@ pub(crate) struct TransformData {
     height: u32,
 }
 
+#[rustfmt::skip]
 fn create_transform_matrix(data: &TransformData, scale_x: f32, scale_y: f32) -> [f32; 16] {
     const ZOOM_MULTIPLIER: f32 = 3.0;
     let zoom = data.zoom.powf(ZOOM_MULTIPLIER);
+
     [
-        zoom * scale_x, 0.0, 0.0, 0.0,
-        0.0, zoom * scale_y, 0.0, 0.0,
-        0.0, 0.0, 1.0, 0.0,
-        data.pan_x, data.pan_y, 0.0, 1.0,
+        zoom * scale_x, 0.0,            0.0, 0.0,
+        0.0,            zoom * scale_y, 0.0, 0.0,
+        0.0,            0.0,            1.0, 0.0,
+        data.pan_x,     data.pan_y,     0.0, 1.0,
     ]
 }
 
@@ -338,8 +340,8 @@ impl App {
 
     async fn set_window(&mut self, window: Window) {
         let window = Arc::new(window);
-        let initial_width = 1500;
-        let initial_height = 1000;
+        let initial_height = 1200;
+        let initial_width = (initial_height as f32 * 1.5) as u32;
 
         let _ = window.request_inner_size(PhysicalSize::new(initial_width, initial_height));
 
@@ -366,7 +368,6 @@ impl App {
     }
 
     fn handle_resized(&mut self, width: u32, height: u32) {
-        println!("Resized {} {}", width, height);
         if width > 0 && height > 0 {
             self.state.as_mut().unwrap().resize_surface(width, height);
         }
@@ -378,7 +379,6 @@ impl App {
 
         state.store.check_loaded_images();
         let imbuf = if let Some(full) = state.store.get_current_image() {
-            // println!("full");
             full
         } else {
             state.store.get_thumbnail()
@@ -391,7 +391,6 @@ impl App {
                 imbuf.rgba_buffer.len() * 4,
             )
         };
-
 
         state.transform_data.width = width;
         state.transform_data.height = height;
@@ -422,7 +421,8 @@ impl App {
     pub fn pan_zoom(&mut self, zoom_delta: f32, pan_x: f32, pan_y: f32) {
         let state = self.state.as_mut().unwrap();
 
-        let image_aspect_ratio = (state.transform_data.width as f32) / (state.transform_data.height as f32);
+        let image_aspect_ratio =
+            (state.transform_data.width as f32) / (state.transform_data.height as f32);
         let window_size = self.window.as_ref().unwrap().inner_size();
         let window_aspect_ratio = window_size.width as f32 / window_size.height as f32;
         let mut scale_x = 1.0;

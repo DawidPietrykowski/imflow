@@ -1,17 +1,22 @@
 use iced::widget::image::Handle;
 use image::DynamicImage;
+use image::RgbaImage;
 use image::imageops::FilterType;
+use image::metadata::Orientation;
 use libheif_rs::{HeifContext, LibHeif, RgbChroma};
 use rexiv2::Metadata;
 use zune_image::codecs::jpeg::JpegDecoder;
+use zune_image::codecs::jpeg_xl::JxlDecoder;
 use zune_image::codecs::qoi::zune_core::colorspace::ColorSpace;
 use zune_image::codecs::qoi::zune_core::options::DecoderOptions;
+use zune_image::traits::DecoderTrait;
 
 use std::fs;
 use std::fs::File;
 use std::fs::read;
 use std::io::BufReader;
 use std::io::Cursor;
+use std::mem;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -26,7 +31,7 @@ pub fn create_iced_handle(width: u32, height: u32, rgba: Vec<u8>) -> Handle {
     Handle::from_rgba(width, height, rgba)
 }
 
-fn get_rating(filename: &PathBuf) -> i32 {
+pub fn get_rating(filename: &PathBuf) -> i32 {
     // // Use xmp-toolkit for video files
     // if is_video(&filename) {
     //     return Ok(read_rating_xmp(filename.clone()).unwrap_or(0));
@@ -43,6 +48,34 @@ fn get_rating(filename: &PathBuf) -> i32 {
     }
 }
 
+pub fn get_orientation(filename: &PathBuf) -> u8 {
+    // // Use xmp-toolkit for video files
+    // if is_video(&filename) {
+    //     return Ok(read_rating_xmp(filename.clone()).unwrap_or(0));
+    // }
+
+    // Use rexiv2 for image files
+    let meta = Metadata::new_from_path(filename);
+    match meta {
+        Ok(meta) => meta.get_orientation() as u8,
+        Err(e) => panic!("{:?}", e),
+    }
+}
+
+fn swap_wh<T>(width: T, height: T, orientation: Orientation) -> (T, T) {
+    if [
+        Orientation::Rotate90,
+        Orientation::Rotate270,
+        Orientation::Rotate90FlipH,
+        Orientation::Rotate270FlipH,
+    ]
+    .contains(&orientation)
+    {
+        return (height, width);
+    }
+    (width, height)
+}
+
 pub fn load_image(path: &PathBuf) -> ImflowImageBuffer {
     let total_start = Instant::now();
 
@@ -53,25 +86,50 @@ pub fn load_image(path: &PathBuf) -> ImflowImageBuffer {
         return img;
     }
 
-    let file = read(path.clone()).unwrap();
-    let mut decoder = JpegDecoder::new(&file);
+    if is_jxl(path) {}
+
     let options = DecoderOptions::new_fast().jpeg_set_out_colorspace(ColorSpace::RGBA);
-    decoder.set_options(options);
 
-    decoder.decode_headers().unwrap();
-    let info = decoder.info().unwrap();
-    let width = info.width as usize;
-    let height = info.height as usize;
+    let mut buffer: Vec<u8>;
+    let width: usize;
+    let height: usize;
+    if is_jxl(path) {
+        let file = BufReader::new(File::open(path).unwrap());
+        let mut decoder = JxlDecoder::try_new(file, options).unwrap();
+        let image =
+            <JxlDecoder<std::io::BufReader<File>> as DecoderTrait<&[u8]>>::decode(&mut decoder)
+                .unwrap();
+        (width, height) = image.dimensions();
+        buffer = (*image.flatten_to_u8().get(0).unwrap().clone()).to_vec();
+        println!("buffer len: {} {} {}", buffer.len(), width, height);
+    } else {
+        let file = read(path.clone()).unwrap();
+        let mut decoder = JpegDecoder::new(&file);
+        decoder.set_options(options);
 
-    let mut buffer: Vec<u8> = vec![0; width * height * 4];
-    decoder.decode_into(buffer.as_mut_slice()).unwrap();
+        decoder.decode_headers().unwrap();
+        let info = decoder.info().unwrap();
+        width = info.width as usize;
+        height = info.height as usize;
+        buffer = vec![0; width * height * 4];
+        decoder.decode_into(buffer.as_mut_slice()).unwrap();
+    };
+
+    // TODO: Optimize rotation
+    // let orientation =
+    //     Orientation::from_exif(get_orientation(path)).unwrap_or(Orientation::NoTransforms);
+    // let image = RgbaImage::from_raw(width as u32, height as u32, buffer).unwrap();
+    // let mut dynamic_image = DynamicImage::from(image);
+    // dynamic_image.apply_orientation(orientation);
+    // let mut buffer = dynamic_image.to_rgba8();
+    // let (width, height) = swap_wh(width, height, orientation);
 
     // Reinterpret to avoid copying
     let buffer_u32 = unsafe {
         Vec::from_raw_parts(
             buffer.as_mut_ptr() as *mut u32,
             buffer.len() / 4,
-            buffer.capacity() / 4,
+            buffer.len() / 4,
         )
     };
     std::mem::forget(buffer);
@@ -92,13 +150,15 @@ pub fn load_image(path: &PathBuf) -> ImflowImageBuffer {
 pub fn image_to_rgba_buffer(img: DynamicImage) -> Vec<u32> {
     let flat = img.to_rgba8();
     let mut buffer = flat.to_vec();
-    unsafe {
+    let vec = unsafe {
         Vec::from_raw_parts(
             buffer.as_mut_ptr() as *mut u32,
             buffer.len() / 4,
             buffer.len() / 4,
         )
-    }
+    };
+    mem::forget(buffer);
+    vec
 }
 
 pub fn load_available_images(dir: PathBuf) -> Vec<PathBuf> {
@@ -130,7 +190,7 @@ fn is_image(path: &PathBuf) -> bool {
     if !path.is_file() {
         return false;
     }
-    ["jpg", "heic", "heif"].contains(
+    ["jpg", "jxl", "heic", "heif"].contains(
         &path
             .extension()
             .unwrap()
@@ -142,6 +202,17 @@ fn is_image(path: &PathBuf) -> bool {
 
 fn is_heif(path: &PathBuf) -> bool {
     ["heif", "heic"].contains(
+        &path
+            .extension()
+            .unwrap()
+            .to_ascii_lowercase()
+            .to_str()
+            .unwrap(),
+    )
+}
+
+fn is_jxl(path: &PathBuf) -> bool {
+    ["jxl", "jpgxl"].contains(
         &path
             .extension()
             .unwrap()
@@ -268,3 +339,23 @@ pub fn load_heif(path: &PathBuf, resize: bool) -> ImflowImageBuffer {
         rating,
     }
 }
+
+// fn load_jxl(path: &PathBuf) -> ImflowImageBuffer {
+//     let file = BufReader::new(File::open(path).unwrap());
+//     let decoder = JxlDecoder::try_new(file, DecoderOptions::new_fast()).unwrap();
+//     // let reader = image::ImageReader::new(file);
+//     let image = decoder
+//         .decode()
+//         .unwrap();
+//     let width = image.width() as usize;
+//     let height = image.height() as usize;
+//     let buffer = image_to_rgba_buffer(image);
+//     let rating = get_rating(path.into());
+
+//     ImflowImageBuffer {
+//         width,
+//         height,
+//         rgba_buffer: buffer,
+//         rating,
+//     }
+// }

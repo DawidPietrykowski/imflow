@@ -84,7 +84,10 @@ impl ImageStore {
         if let Some(full) = self.loaded_images.get_mut(&self.current_image_path.clone()) {
             full.rating = rating;
         }
-        if let Some(thumbnail) = self.loaded_images_thumbnails.get_mut(&self.current_image_path.clone()) {
+        if let Some(thumbnail) = self
+            .loaded_images_thumbnails
+            .get_mut(&self.current_image_path.clone())
+        {
             thumbnail.rating = rating;
         }
     }

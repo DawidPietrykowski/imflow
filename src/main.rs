@@ -323,7 +323,6 @@ mod egui_tools;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() {
-
     let args = Args::parse();
     let path = args.path.unwrap_or("./test_images".into());
     #[cfg(not(target_arch = "wasm32"))]
@@ -379,7 +378,6 @@ async fn run(path: PathBuf) {
     // }
 }
 
-
 struct MyApp {
     // image: Image,
     store: ImageStore,
@@ -388,10 +386,7 @@ struct MyApp {
 
 impl MyApp {
     fn new(store: ImageStore, texture: TextureHandle) -> Self {
-        Self {
-            store,
-            texture,
-        }
+        Self { store, texture }
     }
 }
 
@@ -425,7 +420,7 @@ struct Args {
 }
 
 // fn init_app() {
-    
+
 //             let mut store = ImageStore::new("./test_images".into());
 
 //             let mut imbuf = store.get_current_image().unwrap();
