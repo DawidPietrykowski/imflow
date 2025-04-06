@@ -18,7 +18,7 @@ pub struct ImflowImageBuffer {
     pub width: usize,
     pub height: usize,
     pub argb_buffer: Vec<u32>,
-    pub rating: i32
+    pub rating: i32,
 }
 
 pub fn create_iced_handle(width: u32, height: u32, rgba: Vec<u8>) -> Handle {
@@ -81,7 +81,7 @@ pub fn load_image(path: PathBuf) -> ImflowImageBuffer {
         width,
         height,
         argb_buffer: buffer_u32,
-        rating
+        rating,
     }
 }
 
@@ -103,7 +103,7 @@ pub fn load_available_images(dir: PathBuf) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
         .unwrap()
         .map(|f| f.unwrap().path())
-        .filter(|f| f.extension().unwrap().to_ascii_lowercase() == "jpg")
+        .filter(|f| ["jpg", "heic"].contains(&f.extension().unwrap().to_ascii_lowercase().to_str().unwrap()))
         .collect();
     files.sort();
     files
@@ -113,8 +113,10 @@ pub fn get_embedded_thumbnail(path: PathBuf) -> Option<Vec<u8>> {
     let meta = rexiv2::Metadata::new_from_path(path);
     match meta {
         Ok(meta) => {
-            for preview in meta.get_preview_images().unwrap() {
-                return Some(preview.get_data().unwrap());
+            if let Some(previews) = meta.get_preview_images() {
+                for preview in previews {
+                    return Some(preview.get_data().unwrap());
+                }
             }
             None
         }
@@ -155,7 +157,7 @@ pub fn load_thumbnail_exif(path: &PathBuf) -> Option<ImflowImageBuffer> {
                 width,
                 height,
                 argb_buffer: buffer,
-                rating
+                rating,
             })
         }
         _ => None,
@@ -180,6 +182,6 @@ pub fn load_thumbnail_full(path: &PathBuf) -> ImflowImageBuffer {
         width,
         height,
         argb_buffer: buffer,
-        rating
+        rating,
     }
 }

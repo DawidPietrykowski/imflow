@@ -5,6 +5,7 @@ use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use imflow::store::ImageStore;
 use std::any::Any;
+use std::path::PathBuf;
 use std::process::exit;
 use std::sync::Arc;
 use std::time;
@@ -17,12 +18,39 @@ use winit::event_loop::ActiveEventLoop;
 use winit::platform::x11::WindowAttributesExtX11;
 use winit::window::{Window, WindowId};
 
+// Uniforms for transformations
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Transforms {
+    transform: [f32; 16], // 4x4 matrix
+}
+
+struct TransformData {
+    pan_x: f32,
+    pan_y: f32,
+    zoom: f32,
+}
+
+fn create_transform_matrix(data: &TransformData) -> [f32; 16] {
+    const ZOOM_MULTIPLIER: f32 = 3.0;
+    let zoom = data.zoom.powf(ZOOM_MULTIPLIER);
+    [
+        zoom, 0.0, 0.0, 0.0, 0.0, zoom, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, data.pan_x, data.pan_y, 0.0,
+        1.0,
+    ]
+}
+
 fn setup_texture(
     device: &wgpu::Device,
     surface_config: SurfaceConfiguration,
     width: u32,
     height: u32,
-) -> (wgpu::Texture, wgpu::BindGroup, wgpu::RenderPipeline) {
+) -> (
+    wgpu::Texture,
+    wgpu::BindGroup,
+    wgpu::RenderPipeline,
+    wgpu::Buffer,
+) {
     // Create your texture (one-time setup)
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Image texture"),
@@ -71,7 +99,24 @@ fn setup_texture(
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
+    });
+
+    let transform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Transform Uniform Buffer"),
+        size: std::mem::size_of::<Transforms>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     });
 
     // Create bind group with your texture
@@ -86,6 +131,10 @@ fn setup_texture(
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: transform_buffer.as_entire_binding(),
             },
         ],
     });
@@ -151,7 +200,7 @@ fn setup_texture(
         cache: None,
     });
 
-    (texture, bind_group, render_pipeline)
+    (texture, bind_group, render_pipeline, transform_buffer)
 }
 
 pub struct AppState {
@@ -165,6 +214,8 @@ pub struct AppState {
     pub image_texture: wgpu::Texture,
     pub bind_group: wgpu::BindGroup,
     pub render_pipeline: wgpu::RenderPipeline,
+    pub transform_buffer: wgpu::Buffer,
+    pub transform_data: TransformData,
 }
 
 impl AppState {
@@ -174,6 +225,7 @@ impl AppState {
         window: &Window,
         width: u32,
         height: u32,
+        path: PathBuf
     ) -> Self {
         let power_pref = wgpu::PowerPreference::default();
         let adapter = instance
@@ -224,10 +276,16 @@ impl AppState {
 
         let scale_factor = 1.0;
 
-        let store = ImageStore::new("./test_images".into());
+        let store = ImageStore::new(path);
 
-        let (image_texture, bind_group, render_pipeline) =
+        let (image_texture, bind_group, render_pipeline, transform_buffer) =
             setup_texture(&device, surface_config.clone(), 6000, 4000);
+
+        let transform_data = TransformData {
+            pan_x: 0.0,
+            pan_y: 0.0,
+            zoom: 1.0,
+        };
 
         Self {
             device,
@@ -240,6 +298,8 @@ impl AppState {
             image_texture,
             bind_group,
             render_pipeline,
+            transform_buffer,
+            transform_data,
         }
     }
 
@@ -254,15 +314,17 @@ pub struct App {
     instance: wgpu::Instance,
     state: Option<AppState>,
     window: Option<Arc<Window>>,
+    path: PathBuf
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(path: PathBuf) -> Self {
         let instance = egui_wgpu::wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         Self {
             instance,
             state: None,
             window: None,
+            path
         }
     }
 
@@ -284,12 +346,14 @@ impl App {
             &window,
             initial_width,
             initial_width,
+            self.path.clone()
         )
         .await;
 
         self.window.get_or_insert(window);
         self.state.get_or_insert(state);
 
+        self.pan_zoom(0.0, 0.0, 0.0);
         self.update_texture();
     }
 
@@ -337,6 +401,19 @@ impl App {
                 height,
                 depth_or_array_layers: 1,
             },
+        );
+    }
+
+    pub fn pan_zoom(&mut self, zoom_delta: f32, pan_x: f32, pan_y: f32) {
+        let state = self.state.as_mut().unwrap();
+        state.transform_data.zoom = (state.transform_data.zoom + zoom_delta).clamp(1.0, 20.0);
+        state.transform_data.pan_x += pan_x;
+        state.transform_data.pan_y += pan_y;
+        let transform = create_transform_matrix(&state.transform_data);
+        state.queue.write_buffer(
+            &state.transform_buffer,
+            0,
+            bytemuck::cast_slice(&[Transforms { transform }]),
         );
     }
 
@@ -489,6 +566,8 @@ impl App {
         }
 
         let rating = state.store.get_current_rating();
+        let path = state.store.current_image_path.clone();
+        let filename = path.file_name().unwrap();
         let window = self.window.as_ref().unwrap();
         {
             state.egui_renderer.begin_frame(window);
@@ -502,6 +581,11 @@ impl App {
                         ui.label(
                             egui::RichText::new(format!("{:.1}", rating))
                                 .size(42.0)
+                                .strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{}", filename.to_str().unwrap()))
+                                .size(10.0)
                                 .strong(),
                         );
                         // ui.add_space(10.0);
@@ -550,15 +634,13 @@ impl ApplicationHandler for App {
                 self.handle_redraw();
                 // println!("Updated in: {}ms", start.elapsed().as_millis());
                 // Extract the events by cloning them from the input context
-                let events = self
+                let (events, keys_down) = self
                     .state
                     .as_ref()
                     .unwrap()
                     .egui_renderer
                     .context()
-                    .input(|i| {
-                        i.events.clone() // Clone the events to own them outside the closure
-                    });
+                    .input(|i| (i.events.clone(), i.keys_down.clone()));
 
                 // Now use the extracted events outside the closure
                 events.iter().for_each(|e| {
@@ -594,6 +676,17 @@ impl ApplicationHandler for App {
                             Key::Num5 => self.state.as_mut().unwrap().store.set_rating(5),
                             Key::Escape => exit(0),
                             _ => {}
+                        }
+                    } else if let Event::MouseWheel {
+                        unit,
+                        delta,
+                        modifiers,
+                    } = e
+                    {
+                        self.pan_zoom(delta.y * 0.2, 0.0, 0.0);
+                    } else if let Event::PointerMoved(pos) = e {
+                        if keys_down.contains(&Key::Tab) {
+                            self.pan_zoom(0.0, pos.x * 0.00001, pos.y * 0.00001);
                         }
                     }
                 });

@@ -15,7 +15,7 @@ pub struct ImageStore {
     pub(crate) loaded_images: HashMap<PathBuf, ImflowImageBuffer>,
     pub(crate) loaded_images_thumbnails: HashMap<PathBuf, ImflowImageBuffer>,
     pub(crate) available_images: Vec<PathBuf>,
-    pub(crate) current_image_path: PathBuf,
+    pub current_image_path: PathBuf,
     pub(crate) pool: ThreadPool,
     pub(crate) loader_rx: mpsc::Receiver<(PathBuf, ImflowImageBuffer)>,
     pub(crate) loader_tx: mpsc::Sender<(PathBuf, ImflowImageBuffer)>,
