@@ -53,7 +53,7 @@ impl ImageStore {
         );
 
         let path = available_images[0].clone();
-        let image = load_image(path.clone());
+        let image = load_image(&path.clone());
         loaded_images.insert(path, image);
         let mut state = Self {
             current_image_id,
@@ -91,7 +91,7 @@ impl ImageStore {
 
     pub fn get_current_rating(&self) -> i32 {
         let imbuf = if let Some(full) = self.get_current_image() {
-            println!("full");
+            // println!("full");
             full
         } else {
             // TODO: this assumes loaded thumbnail
@@ -122,7 +122,7 @@ impl ImageStore {
         self.currently_loading.insert(path.clone());
 
         self.pool.execute(move || {
-            let image = load_image(path.clone());
+            let image = load_image(&path.clone());
             let _ = tx.send((path, image));
         });
     }

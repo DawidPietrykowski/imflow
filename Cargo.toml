@@ -31,6 +31,7 @@ wgpu = "24.0.3"
 # winit = "0.30.9"
 zune-image = {version = "0.4.15", features = ["all"]}
 bytemuck = "1.22.0"
+libheif-rs = "1.1.0"
 [profile.release]
 opt-level = 3
 debug = false

@@ -1,14 +1,11 @@
 use crate::egui_tools::EguiRenderer;
-use eframe::WindowAttributes;
 use egui::{Event, Key};
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use imflow::store::ImageStore;
-use std::any::Any;
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::Arc;
-use std::time;
 use wgpu::util::DeviceExt;
 use wgpu::{PipelineCompilationOptions, SurfaceConfiguration};
 use winit::application::ApplicationHandler;
@@ -23,20 +20,28 @@ use winit::window::{Window, WindowId};
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Transforms {
     transform: [f32; 16], // 4x4 matrix
+    width: u32,
+    height: u32,
+    _padding1: u32,
+    _padding2: u32,
 }
 
-struct TransformData {
+pub(crate) struct TransformData {
     pan_x: f32,
     pan_y: f32,
     zoom: f32,
+    width: u32,
+    height: u32,
 }
 
-fn create_transform_matrix(data: &TransformData) -> [f32; 16] {
+fn create_transform_matrix(data: &TransformData, scale_x: f32, scale_y: f32) -> [f32; 16] {
     const ZOOM_MULTIPLIER: f32 = 3.0;
     let zoom = data.zoom.powf(ZOOM_MULTIPLIER);
     [
-        zoom, 0.0, 0.0, 0.0, 0.0, zoom, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, data.pan_x, data.pan_y, 0.0,
-        1.0,
+        zoom * scale_x, 0.0, 0.0, 0.0,
+        0.0, zoom * scale_y, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        data.pan_x, data.pan_y, 0.0, 1.0,
     ]
 }
 
@@ -62,7 +67,7 @@ fn setup_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
@@ -101,7 +106,7 @@ fn setup_texture(
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 2,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::all(),
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -225,7 +230,7 @@ impl AppState {
         window: &Window,
         width: u32,
         height: u32,
-        path: PathBuf
+        path: PathBuf,
     ) -> Self {
         let power_pref = wgpu::PowerPreference::default();
         let adapter = instance
@@ -279,12 +284,15 @@ impl AppState {
         let store = ImageStore::new(path);
 
         let (image_texture, bind_group, render_pipeline, transform_buffer) =
-            setup_texture(&device, surface_config.clone(), 6000, 4000);
+            // setup_texture(&device, surface_config.clone(), 6000, 4000);
+            setup_texture(&device, surface_config.clone(), 8192, 8192);
 
         let transform_data = TransformData {
             pan_x: 0.0,
             pan_y: 0.0,
             zoom: 1.0,
+            width: 10000,
+            height: 10000,
         };
 
         Self {
@@ -314,7 +322,7 @@ pub struct App {
     instance: wgpu::Instance,
     state: Option<AppState>,
     window: Option<Arc<Window>>,
-    path: PathBuf
+    path: PathBuf,
 }
 
 impl App {
@@ -324,7 +332,7 @@ impl App {
             instance,
             state: None,
             window: None,
-            path
+            path,
         }
     }
 
@@ -346,7 +354,7 @@ impl App {
             &window,
             initial_width,
             initial_width,
-            self.path.clone()
+            self.path.clone(),
         )
         .await;
 
@@ -362,6 +370,7 @@ impl App {
         if width > 0 && height > 0 {
             self.state.as_mut().unwrap().resize_surface(width, height);
         }
+        self.pan_zoom(0.0, 0.0, 0.0);
     }
 
     pub fn update_texture(&mut self) {
@@ -369,7 +378,7 @@ impl App {
 
         state.store.check_loaded_images();
         let imbuf = if let Some(full) = state.store.get_current_image() {
-            println!("full");
+            // println!("full");
             full
         } else {
             state.store.get_thumbnail()
@@ -378,10 +387,14 @@ impl App {
         let height = imbuf.height as u32;
         let buffer_u8 = unsafe {
             std::slice::from_raw_parts(
-                imbuf.argb_buffer.as_ptr() as *const u8,
-                imbuf.argb_buffer.len() * 4,
+                imbuf.rgba_buffer.as_ptr() as *const u8,
+                imbuf.rgba_buffer.len() * 4,
             )
         };
+
+
+        state.transform_data.width = width;
+        state.transform_data.height = height;
 
         state.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -402,18 +415,38 @@ impl App {
                 depth_or_array_layers: 1,
             },
         );
+
+        self.pan_zoom(0.0, 0.0, 0.0);
     }
 
     pub fn pan_zoom(&mut self, zoom_delta: f32, pan_x: f32, pan_y: f32) {
         let state = self.state.as_mut().unwrap();
+
+        let image_aspect_ratio = (state.transform_data.width as f32) / (state.transform_data.height as f32);
+        let window_size = self.window.as_ref().unwrap().inner_size();
+        let window_aspect_ratio = window_size.width as f32 / window_size.height as f32;
+        let mut scale_x = 1.0;
+        let mut scale_y = 1.0;
+        if window_aspect_ratio > image_aspect_ratio {
+            scale_x = image_aspect_ratio / window_aspect_ratio;
+        } else {
+            scale_y = window_aspect_ratio / image_aspect_ratio;
+        }
+
         state.transform_data.zoom = (state.transform_data.zoom + zoom_delta).clamp(1.0, 20.0);
         state.transform_data.pan_x += pan_x;
         state.transform_data.pan_y += pan_y;
-        let transform = create_transform_matrix(&state.transform_data);
+        let transform = create_transform_matrix(&state.transform_data, scale_x, scale_y);
         state.queue.write_buffer(
             &state.transform_buffer,
             0,
-            bytemuck::cast_slice(&[Transforms { transform }]),
+            bytemuck::cast_slice(&[Transforms {
+                transform,
+                width: state.transform_data.width,
+                height: state.transform_data.height,
+                _padding1: 0,
+                _padding2: 0,
+            }]),
         );
     }
 
@@ -473,7 +506,7 @@ impl App {
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.0,
-                            g: 1.0, // Green
+                            g: 0.0, // Green
                             b: 0.0,
                             a: 1.0,
                         }),
@@ -611,7 +644,7 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attributes = Window::default_attributes()
             .with_base_size(LogicalSize::new(2000, 4000))
-            .with_resizable(false);
+            .with_resizable(true);
         let window = event_loop.create_window(attributes).unwrap();
         pollster::block_on(self.set_window(window));
     }
@@ -630,7 +663,7 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                let start = time::Instant::now();
+                // let start = time::Instant::now();
                 self.handle_redraw();
                 // println!("Updated in: {}ms", start.elapsed().as_millis());
                 // Extract the events by cloning them from the input context
@@ -677,12 +710,7 @@ impl ApplicationHandler for App {
                             Key::Escape => exit(0),
                             _ => {}
                         }
-                    } else if let Event::MouseWheel {
-                        unit,
-                        delta,
-                        modifiers,
-                    } = e
-                    {
+                    } else if let Event::MouseWheel { delta, .. } = e {
                         self.pan_zoom(delta.y * 0.2, 0.0, 0.0);
                     } else if let Event::PointerMoved(pos) = e {
                         if keys_down.contains(&Key::Tab) {
