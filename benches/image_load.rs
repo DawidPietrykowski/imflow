@@ -17,6 +17,9 @@ use imflow::image::{
     ImflowImageBuffer, get_orientation, get_rating, image_to_rgba_buffer, load_available_images,
     load_image, load_thumbnail_exif, load_thumbnail_full,
 };
+use jpegxl_rs::Endianness;
+use jpegxl_rs::decode::{Data, PixelFormat, Pixels};
+use jpegxl_rs::decoder_builder;
 use zune_image::codecs::jpeg::JpegDecoder as ZuneJpegDecoder;
 use zune_image::codecs::qoi::zune_core::colorspace::ColorSpace;
 use zune_image::codecs::qoi::zune_core::options::DecoderOptions;
@@ -150,6 +153,47 @@ fn load_b(path: &PathBuf) -> ImflowImageBuffer {
         rating,
     }
 }
+
+fn load_jxl_single(path: &PathBuf) -> (jpegxl_rs::decode::Metadata, Vec<u8>) {
+    let file = read(path).unwrap();
+    use jpegxl_rs::ThreadsRunner;
+    let runner = ThreadsRunner::default();
+    let decoder = decoder_builder()
+        // .parallel_runner(&runner)
+        .pixel_format(PixelFormat {
+            num_channels: 4,
+            endianness: Endianness::Big,
+            align: 8,
+        })
+        .build()
+        .unwrap();
+
+    decoder.decode_with::<u8>(&file).unwrap()
+    // buffer = data;
+    // width = metadata.width as usize;
+    // height = metadata.height as usize;
+}
+
+fn load_jxl_multi(path: &PathBuf) -> (jpegxl_rs::decode::Metadata, Vec<u8>) {
+    let file = read(path).unwrap();
+    use jpegxl_rs::ThreadsRunner;
+    let runner = ThreadsRunner::default();
+    let decoder = decoder_builder()
+        .parallel_runner(&runner)
+        .pixel_format(PixelFormat {
+            num_channels: 4,
+            endianness: Endianness::Big,
+            align: 8,
+        })
+        .build()
+        .unwrap();
+
+    decoder.decode_with::<u8>(&file).unwrap()
+    // buffer = data;
+    // width = metadata.width as usize;
+    // height = metadata.height as usize;
+}
+
 // fn load_b(path: &PathBuf) -> ImflowImageBuffer {
 //     println!("path: {:?}", path);
 //     // let file = read(path.clone()).unwrap();
@@ -222,6 +266,29 @@ pub fn file_load_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
+pub fn jxl_multithreading_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("jxl_multithreading");
+
+    group
+        .sample_size(10)
+        .measurement_time(Duration::from_millis(500))
+        .warm_up_time(Duration::from_millis(200));
+
+    let images = load_available_images("./test_images/jxl".into());
+    group.bench_function("single", |b| {
+        for image in images.iter().take(10) {
+            b.iter(|| load_jxl_single(image));
+        }
+    });
+    group.bench_function("multi", |b| {
+        for image in images.iter().take(10) {
+            b.iter(|| load_jxl_multi(image));
+        }
+    });
+
+    group.finish();
+}
 // criterion_group!(benches, thumbnail_load_benchmark);
-criterion_group!(benches, file_load_benchmark);
+// criterion_group!(benches, file_load_benchmark);
+criterion_group!(benches, jxl_multithreading_benchmark);
 criterion_main!(benches);

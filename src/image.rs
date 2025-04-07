@@ -1,8 +1,13 @@
-use iced::widget::image::Handle;
 use image::DynamicImage;
+use image::ImageDecoder;
 use image::RgbaImage;
 use image::imageops::FilterType;
 use image::metadata::Orientation;
+use jpegxl_rs::Endianness;
+use jpegxl_rs::decode::Data;
+use jpegxl_rs::decode::PixelFormat;
+use jpegxl_rs::decode::Pixels;
+use jpegxl_rs::decoder_builder;
 use libheif_rs::{HeifContext, LibHeif, RgbChroma};
 use rexiv2::Metadata;
 use zune_image::codecs::jpeg::JpegDecoder;
@@ -16,6 +21,7 @@ use std::fs::File;
 use std::fs::read;
 use std::io::BufReader;
 use std::io::Cursor;
+use std::io::Read;
 use std::mem;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -27,9 +33,9 @@ pub struct ImflowImageBuffer {
     pub rating: i32,
 }
 
-pub fn create_iced_handle(width: u32, height: u32, rgba: Vec<u8>) -> Handle {
-    Handle::from_rgba(width, height, rgba)
-}
+// pub fn create_iced_handle(width: u32, height: u32, rgba: Vec<u8>) -> Handle {
+//     Handle::from_rgba(width, height, rgba)
+// }
 
 pub fn get_rating(filename: &PathBuf) -> i32 {
     // // Use xmp-toolkit for video files
@@ -86,23 +92,49 @@ pub fn load_image(path: &PathBuf) -> ImflowImageBuffer {
         return img;
     }
 
-    if is_jxl(path) {}
-
-    let options = DecoderOptions::new_fast().jpeg_set_out_colorspace(ColorSpace::RGBA);
-
-    let mut buffer: Vec<u8>;
     let width: usize;
     let height: usize;
+    let rating = get_rating(path);
     if is_jxl(path) {
-        let file = BufReader::new(File::open(path).unwrap());
-        let mut decoder = JxlDecoder::try_new(file, options).unwrap();
-        let image =
-            <JxlDecoder<std::io::BufReader<File>> as DecoderTrait<&[u8]>>::decode(&mut decoder)
-                .unwrap();
-        (width, height) = image.dimensions();
-        buffer = (*image.flatten_to_u8().get(0).unwrap().clone()).to_vec();
-        println!("buffer len: {} {} {}", buffer.len(), width, height);
+        let file = read(path).unwrap();
+        use jpegxl_rs::ThreadsRunner;
+        let runner = ThreadsRunner::default();
+        let decoder = decoder_builder()
+            .parallel_runner(&runner)
+            .pixel_format(PixelFormat {
+                num_channels: 4,
+                endianness: Endianness::Big,
+                align: 8,
+            })
+            .build()
+            .unwrap();
+
+        let (metadata, buffer) = decoder.decode_with::<u8>(&file).unwrap();
+        width = metadata.width as usize;
+        height = metadata.height as usize;
+
+        let rgba_buffer = unsafe {
+            Vec::from_raw_parts(
+                buffer.as_ptr() as *mut u32,
+                buffer.len() / 4,
+                buffer.len() / 4,
+            )
+        };
+        std::mem::forget(buffer);
+
+        println!("Total loading time: {:?}", total_start.elapsed());
+
+        let rating = get_rating(path);
+
+        ImflowImageBuffer {
+            width,
+            height,
+            rgba_buffer,
+            rating,
+        }
     } else {
+        let mut buffer: Vec<u8>;
+        let options = DecoderOptions::new_fast().jpeg_set_out_colorspace(ColorSpace::RGBA);
         let file = read(path.clone()).unwrap();
         let mut decoder = JpegDecoder::new(&file);
         decoder.set_options(options);
@@ -113,37 +145,36 @@ pub fn load_image(path: &PathBuf) -> ImflowImageBuffer {
         height = info.height as usize;
         buffer = vec![0; width * height * 4];
         decoder.decode_into(buffer.as_mut_slice()).unwrap();
-    };
 
-    // TODO: Optimize rotation
-    // let orientation =
-    //     Orientation::from_exif(get_orientation(path)).unwrap_or(Orientation::NoTransforms);
-    // let image = RgbaImage::from_raw(width as u32, height as u32, buffer).unwrap();
-    // let mut dynamic_image = DynamicImage::from(image);
-    // dynamic_image.apply_orientation(orientation);
-    // let mut buffer = dynamic_image.to_rgba8();
-    // let (width, height) = swap_wh(width, height, orientation);
+        let orientation_start = Instant::now();
+        // TODO: Optimize rotation
+        let orientation =
+            Orientation::from_exif(get_orientation(path)).unwrap_or(Orientation::NoTransforms);
+        let image = RgbaImage::from_raw(width as u32, height as u32, buffer).unwrap();
+        let mut dynamic_image = DynamicImage::from(image);
+        dynamic_image.apply_orientation(orientation);
+        let buffer = dynamic_image.as_rgba8().unwrap();
+        let (width, height) = swap_wh(width, height, orientation);
+        let orientation_time = orientation_start.elapsed();
 
-    // Reinterpret to avoid copying
-    let buffer_u32 = unsafe {
-        Vec::from_raw_parts(
-            buffer.as_mut_ptr() as *mut u32,
-            buffer.len() / 4,
-            buffer.len() / 4,
-        )
-    };
-    std::mem::forget(buffer);
-
-    let total_time = total_start.elapsed();
-    println!("Total loading time: {:?}", total_time);
-
-    let rating = get_rating(path);
-
-    ImflowImageBuffer {
-        width,
-        height,
-        rgba_buffer: buffer_u32,
-        rating,
+        // Reinterpret to avoid copying
+        let rgba_buffer = unsafe {
+            Vec::from_raw_parts(
+                buffer.as_ptr() as *mut u32,
+                buffer.len() / 4,
+                buffer.len() / 4,
+            )
+        };
+        std::mem::forget(dynamic_image);
+        let total_time = total_start.elapsed();
+        println!("Orientation time: {:?}", orientation_time);
+        println!("Total loading time: {:?}", total_time);
+        ImflowImageBuffer {
+            width,
+            height,
+            rgba_buffer,
+            rating,
+        }
     }
 }
 
