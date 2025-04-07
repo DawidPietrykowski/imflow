@@ -668,7 +668,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 self.handle_redraw();
-                let (events, keys_down, pointer) = self
+                let (events, _keys_down, pointer) = self
                     .state
                     .as_ref()
                     .unwrap()
