@@ -1,5 +1,5 @@
 use crate::egui_tools::EguiRenderer;
-use egui::{Event, Key};
+use egui::{Event, Key, PointerButton};
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use imflow::store::ImageStore;
@@ -58,7 +58,6 @@ fn setup_texture(
     wgpu::RenderPipeline,
     wgpu::Buffer,
 ) {
-    // Create your texture (one-time setup)
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Image texture"),
         size: wgpu::Extent3d {
@@ -74,7 +73,6 @@ fn setup_texture(
         view_formats: &[],
     });
 
-    // Create texture view and sampler
     let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -86,7 +84,6 @@ fn setup_texture(
         ..Default::default()
     });
 
-    // Create bind group layout for the texture
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Texture Bind Group Layout"),
         entries: &[
@@ -145,7 +142,7 @@ fn setup_texture(
             },
         ],
     });
-    // Define vertex buffer layout
+
     let vertex_buffer_layout = wgpu::VertexBufferLayout {
         array_stride: 5 * std::mem::size_of::<f32>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Vertex,
@@ -165,13 +162,11 @@ fn setup_texture(
         ],
     };
 
-    // Create shader modules
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Texture Shader"),
         source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("shader.wgsl"))),
     });
 
-    // Create the render pipeline (simplified, you'd need to define vertex buffers, etc.)
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Texture Render Pipeline"),
         layout: Some(
@@ -418,7 +413,7 @@ impl App {
         self.pan_zoom(0.0, 0.0, 0.0);
     }
 
-    pub fn pan_zoom(&mut self, zoom_delta: f32, pan_x: f32, pan_y: f32) {
+    fn update_transform(&mut self) {
         let state = self.state.as_mut().unwrap();
 
         let image_aspect_ratio =
@@ -432,10 +427,6 @@ impl App {
         } else {
             scale_y = window_aspect_ratio / image_aspect_ratio;
         }
-
-        state.transform_data.zoom = (state.transform_data.zoom + zoom_delta).clamp(1.0, 20.0);
-        state.transform_data.pan_x += pan_x;
-        state.transform_data.pan_y += pan_y;
         let transform = create_transform_matrix(&state.transform_data, scale_x, scale_y);
         state.queue.write_buffer(
             &state.transform_buffer,
@@ -448,6 +439,25 @@ impl App {
                 _padding2: 0,
             }]),
         );
+    }
+
+    pub fn reset_transform(&mut self) {
+        let state = self.state.as_mut().unwrap();
+        state.transform_data.zoom = 1.0;
+        state.transform_data.pan_x = 0.0;
+        state.transform_data.pan_y = 0.0;
+
+        self.update_transform();
+    }
+
+    pub fn pan_zoom(&mut self, zoom_delta: f32, pan_x: f32, pan_y: f32) {
+        let state = self.state.as_mut().unwrap();
+
+        state.transform_data.zoom = (state.transform_data.zoom + zoom_delta).clamp(1.0, 20.0);
+        state.transform_data.pan_x += pan_x;
+        state.transform_data.pan_y += pan_y;
+
+        self.update_transform();
     }
 
     fn handle_redraw(&mut self) {
@@ -496,7 +506,7 @@ impl App {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        // Add this render pass to clear the screen with green
+        // Clear buffer with black
         {
             let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
@@ -506,7 +516,7 @@ impl App {
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.0,
-                            g: 0.0, // Green
+                            g: 0.0,
                             b: 0.0,
                             a: 1.0,
                         }),
@@ -520,7 +530,6 @@ impl App {
         }
 
         {
-            // Define vertices for your quad
             #[repr(C)]
             #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
             struct Vertex {
@@ -528,7 +537,7 @@ impl App {
                 tex_coords: [f32; 2],
             }
 
-            // Define a quad (two triangles)
+            // Quad (two triangles)
             let vertices = [
                 // Position (x, y, z),   Texture coords (u, v)
                 Vertex {
@@ -549,10 +558,8 @@ impl App {
                 }, // top right
             ];
 
-            // Create indices for drawing two triangles
             let indices: [u16; 6] = [0, 1, 2, 2, 1, 3];
 
-            // Create vertex buffer
             let vertex_buffer =
                 state
                     .device
@@ -562,7 +569,6 @@ impl App {
                         usage: wgpu::BufferUsages::VERTEX,
                     });
 
-            // Create index buffer
             let index_buffer = state
                 .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -577,7 +583,6 @@ impl App {
                     view: &surface_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        // Use Load instead of Clear so we don't erase the green background
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
@@ -593,14 +598,14 @@ impl App {
             // Bind the vertex buffer
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
-            // Draw using the index buffer (more efficient)
+            // Draw using the index buffer
             render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.draw_indexed(0..6, 0, 0..1);
         }
 
         let rating = state.store.get_current_rating();
         let path = state.store.current_image_path.clone();
-        let filename = path.file_name().unwrap();
+        let filename = path.path.file_name().unwrap();
         let window = self.window.as_ref().unwrap();
         {
             state.egui_renderer.begin_frame(window);
@@ -621,7 +626,6 @@ impl App {
                                 .size(10.0)
                                 .strong(),
                         );
-                        // ui.add_space(10.0);
                     });
                 });
 
@@ -663,19 +667,15 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                // let start = time::Instant::now();
                 self.handle_redraw();
-                // println!("Updated in: {}ms", start.elapsed().as_millis());
-                // Extract the events by cloning them from the input context
-                let (events, keys_down) = self
+                let (events, keys_down, pointer) = self
                     .state
                     .as_ref()
                     .unwrap()
                     .egui_renderer
                     .context()
-                    .input(|i| (i.events.clone(), i.keys_down.clone()));
+                    .input(|i| (i.events.clone(), i.keys_down.clone(), i.pointer.clone()));
 
-                // Now use the extracted events outside the closure
                 events.iter().for_each(|e| {
                     if let Event::Key { key, pressed, .. } = e {
                         if !*pressed {
@@ -712,12 +712,19 @@ impl ApplicationHandler for App {
                         }
                     } else if let Event::MouseWheel { delta, .. } = e {
                         self.pan_zoom(delta.y * 0.2, 0.0, 0.0);
-                    } else if let Event::PointerMoved(pos) = e {
-                        if keys_down.contains(&Key::Tab) {
-                            self.pan_zoom(0.0, pos.x * 0.00001, pos.y * 0.00001);
+                    } else if let Event::PointerButton {
+                        button, pressed, ..
+                    } = e
+                    {
+                        if *pressed && *button == PointerButton::Secondary {
+                            self.reset_transform();
                         }
                     }
                 });
+
+                if pointer.primary_down() && pointer.is_moving() {
+                    self.pan_zoom(0.0, pointer.delta().x * 0.001, pointer.delta().y * -0.001);
+                }
 
                 self.window.as_ref().unwrap().request_redraw();
             }

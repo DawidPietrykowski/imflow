@@ -1,4 +1,4 @@
-use crate::image::load_thumbnail;
+use crate::image::{ImageData, load_thumbnail};
 use crate::image::{ImflowImageBuffer, load_available_images, load_image};
 use rexiv2::Metadata;
 use std::collections::HashMap;
@@ -12,21 +12,21 @@ const PRELOAD_NEXT_IMAGE_N: usize = 16;
 
 pub struct ImageStore {
     pub(crate) current_image_id: usize,
-    pub(crate) loaded_images: HashMap<PathBuf, ImflowImageBuffer>,
-    pub(crate) loaded_images_thumbnails: HashMap<PathBuf, ImflowImageBuffer>,
-    pub(crate) available_images: Vec<PathBuf>,
-    pub current_image_path: PathBuf,
+    pub(crate) loaded_images: HashMap<ImageData, ImflowImageBuffer>,
+    pub(crate) loaded_images_thumbnails: HashMap<ImageData, ImflowImageBuffer>,
+    pub(crate) available_images: Vec<ImageData>,
+    pub current_image_path: ImageData,
     pub(crate) pool: ThreadPool,
-    pub(crate) loader_rx: mpsc::Receiver<(PathBuf, ImflowImageBuffer)>,
-    pub(crate) loader_tx: mpsc::Sender<(PathBuf, ImflowImageBuffer)>,
-    pub(crate) currently_loading: HashSet<PathBuf>,
+    pub(crate) loader_rx: mpsc::Receiver<(ImageData, ImflowImageBuffer)>,
+    pub(crate) loader_tx: mpsc::Sender<(ImageData, ImflowImageBuffer)>,
+    pub(crate) currently_loading: HashSet<ImageData>,
 }
 
 impl ImageStore {
     pub fn new(path: PathBuf) -> Self {
         let current_image_id: usize = 0;
-        let mut loaded_images: HashMap<PathBuf, ImflowImageBuffer> = HashMap::new();
-        let mut loaded_thumbnails: HashMap<PathBuf, ImflowImageBuffer> = HashMap::new();
+        let mut loaded_images: HashMap<ImageData, ImflowImageBuffer> = HashMap::new();
+        let mut loaded_thumbnails: HashMap<ImageData, ImflowImageBuffer> = HashMap::new();
         let available_images = load_available_images(path);
         let new_path = available_images[0].clone();
 
@@ -73,11 +73,12 @@ impl ImageStore {
     }
 
     pub fn set_rating(&mut self, rating: i32) {
-        let meta = Metadata::new_from_path(self.current_image_path.clone());
+        let meta = Metadata::new_from_path(self.current_image_path.path.clone());
         match meta {
             Ok(meta) => {
                 meta.set_tag_numeric("Xmp.xmp.Rating", rating).unwrap();
-                meta.save_to_file(self.current_image_path.clone()).unwrap();
+                meta.save_to_file(self.current_image_path.path.clone())
+                    .unwrap();
             }
             Err(e) => panic!("{:?}", e),
         }
@@ -117,7 +118,7 @@ impl ImageStore {
         }
     }
 
-    pub fn request_load(&mut self, path: PathBuf) {
+    pub fn request_load(&mut self, path: ImageData) {
         if self.loaded_images.contains_key(&path) || self.currently_loading.contains(&path) {
             return;
         }
@@ -154,7 +155,7 @@ impl ImageStore {
         self.loaded_images.get(&self.current_image_path)
     }
 
-    pub fn get_image(&self, path: &PathBuf) -> Option<&ImflowImageBuffer> {
+    pub fn get_image(&self, path: &ImageData) -> Option<&ImflowImageBuffer> {
         self.loaded_images.get(path)
     }
 
