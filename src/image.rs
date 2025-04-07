@@ -28,10 +28,12 @@ pub enum ImageFormat {
     Heif,
 }
 
-#[derive(Clone, Eq, Hash, PartialEq, PartialOrd)]
+#[derive(Clone, Eq, Hash, PartialEq)]
 pub struct ImageData {
     pub path: PathBuf,
     pub format: ImageFormat,
+    pub embedded_thumbnail: bool,
+    pub orientation: Orientation,
 }
 
 pub struct ImflowImageBuffer {
@@ -52,11 +54,12 @@ pub fn get_rating(image: &ImageData) -> i32 {
     }
 }
 
-pub fn get_orientation(image: &ImageData) -> u8 {
-    let meta = Metadata::new_from_path(&image.path);
+pub fn get_orientation(path: &PathBuf) -> Orientation {
+    let meta = Metadata::new_from_path(path);
     match meta {
-        Ok(meta) => meta.get_orientation() as u8,
-        Err(e) => panic!("{:?}", e),
+        Ok(meta) => Orientation::from_exif(meta.get_orientation() as u8)
+            .unwrap_or(Orientation::NoTransforms),
+        Err(_) => Orientation::NoTransforms,
     }
 }
 
@@ -157,8 +160,7 @@ pub fn load_image(image: &ImageData) -> ImflowImageBuffer {
 
             let orientation_start = Instant::now();
             // TODO: Optimize rotation
-            let orientation =
-                Orientation::from_exif(get_orientation(image)).unwrap_or(Orientation::NoTransforms);
+            let orientation = image.orientation;
             let image = RgbaImage::from_raw(width as u32, height as u32, buffer).unwrap();
             let mut dynamic_image = DynamicImage::from(image);
             dynamic_image.apply_orientation(orientation);
@@ -209,12 +211,30 @@ pub fn load_available_images(dir: PathBuf) -> Vec<ImageData> {
         .sorted()
         .filter_map(|path| {
             if let Some(format) = get_format(&path) {
-                Some(ImageData { path, format })
+                let meta = Metadata::new_from_path(&path)
+                    .expect(&format!("Image has no metadata: {:?}", path).to_string());
+                let embedded_thumbnail = meta.get_preview_images().is_some();
+                let orientation = Orientation::from_exif(meta.get_orientation() as u8)
+                    .unwrap_or(Orientation::NoTransforms);
+                Some(ImageData {
+                    path,
+                    format,
+                    embedded_thumbnail,
+                    orientation,
+                })
             } else {
                 None
             }
         })
         .collect::<Vec<ImageData>>()
+}
+
+pub fn check_embedded_thumbnail(path: &PathBuf) -> bool {
+    if let Ok(meta) = Metadata::new_from_path(&path) {
+        meta.get_preview_images().is_some()
+    } else {
+        false
+    }
 }
 
 pub fn get_embedded_thumbnail(image: &ImageData) -> Option<Vec<u8>> {
@@ -301,19 +321,10 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     let lib_heif = LibHeif::new();
     let ctx = HeifContext::read_from_file(path.path.to_str().unwrap()).unwrap();
     let handle = ctx.primary_image_handle().unwrap();
-    // assert_eq!(handle.width(), 1652);
-    // assert_eq!(handle.height(), 1791);
-
-    // Get Exif
-    // let mut meta_ids: Vec<ItemId> = vec![0; 1];
-    // let count = handle.metadata_block_ids(&mut meta_ids, b"Exif");
-    // assert_eq!(count, 1);
-    // let exif: Vec<u8> = handle.metadata(meta_ids[0]).unwrap();
-
-    // Decode the image
     let mut image = lib_heif
         .decode(&handle, libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba), None)
         .unwrap();
+
     assert_eq!(
         image.color_space(),
         Some(libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba)),
@@ -337,7 +348,6 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     assert!(interleaved_plane.stride > 0);
 
     let rgba_buffer = interleaved_plane.data;
-    // Create a slice of u32 from the u8 slice
     let u32_slice = unsafe {
         std::slice::from_raw_parts(rgba_buffer.as_ptr() as *const u32, rgba_buffer.len() / 4)
     };

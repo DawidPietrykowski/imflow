@@ -40,10 +40,12 @@ impl ImageStore {
         let mut loaded = 0;
         let to_load = available_images.len();
         for path in &available_images {
-            let buf = load_thumbnail(path);
-            loaded_thumbnails.insert(path.clone(), buf);
+            if path.embedded_thumbnail {
+                let buf = load_thumbnail(path);
+                loaded_thumbnails.insert(path.clone(), buf);
+                println!("Loaded embedded thumbnail for: {}/{}", loaded, to_load);
+            }
             loaded += 1;
-            println!("{}/{}", loaded, to_load);
         }
         let total_time = total_start.elapsed();
         println!(

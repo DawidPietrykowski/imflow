@@ -14,8 +14,8 @@ use image::codecs::jpeg::JpegDecoder;
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageResult, RgbaImage};
 use imflow::image::{
-    ImflowImageBuffer, get_orientation, get_rating, image_to_rgba_buffer, load_available_images,
-    load_image, load_thumbnail_exif, load_thumbnail_full,
+    ImflowImageBuffer, check_embedded_thumbnail, get_orientation, get_rating, image_to_rgba_buffer,
+    load_available_images, load_image, load_thumbnail_exif, load_thumbnail_full,
 };
 use jpegxl_rs::Endianness;
 use jpegxl_rs::decode::{Data, PixelFormat, Pixels};
@@ -105,7 +105,7 @@ fn load_a(path: &PathBuf) -> ImflowImageBuffer {
     // let total_time = total_start.elapsed();
     // println!("Total loading time: {:?}", total_time);
 
-    let rating = get_rating(path);
+    let rating = 0;
 
     ImflowImageBuffer {
         width,
@@ -130,11 +130,11 @@ fn load_b(path: &PathBuf) -> ImflowImageBuffer {
     decoder.decode_into(buffer.as_mut_slice()).unwrap();
 
     let image = RgbaImage::from_raw(width as u32, height as u32, buffer).unwrap();
-    let orientation = Orientation::from_exif(get_orientation(path)).unwrap();
+    // let orientation = Orientation::from_exif(get_orientation(path)).unwrap();
     let mut dynamic_image = DynamicImage::from(image);
-    dynamic_image.apply_orientation(orientation);
+    // dynamic_image.apply_orientation(orientation);
 
-    let rating = get_rating(path);
+    let rating = 0;
 
     let mut buffer = dynamic_image.to_rgba8();
     let buffer_u32 = unsafe {
@@ -254,12 +254,12 @@ pub fn file_load_benchmark(c: &mut Criterion) {
     let images = load_available_images(PATH.into());
     group.bench_function("zune_jpeg", |b| {
         for image in images.iter().take(10) {
-            b.iter(|| load_a(image));
+            b.iter(|| load_a(&image.path));
         }
     });
     group.bench_function("image_rs", |b| {
         for image in images.iter().take(10) {
-            b.iter(|| load_b(image));
+            b.iter(|| load_b(&image.path));
         }
     });
 
@@ -277,12 +277,29 @@ pub fn jxl_multithreading_benchmark(c: &mut Criterion) {
     let images = load_available_images("./test_images/jxl".into());
     group.bench_function("single", |b| {
         for image in images.iter().take(10) {
-            b.iter(|| load_jxl_single(image));
+            b.iter(|| load_jxl_single(&image.path));
         }
     });
     group.bench_function("multi", |b| {
         for image in images.iter().take(10) {
-            b.iter(|| load_jxl_multi(image));
+            b.iter(|| load_jxl_multi(&image.path));
+        }
+    });
+
+    group.finish();
+}
+pub fn thumbnail_check_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("thumbnail_check");
+
+    group
+        .sample_size(10)
+        .measurement_time(Duration::from_millis(500))
+        .warm_up_time(Duration::from_millis(200));
+
+    let images = load_available_images("./test_images/jxl".into());
+    group.bench_function("has_thumbnail", |b| {
+        for image in images.iter().take(10) {
+            b.iter(|| check_embedded_thumbnail(&image.path));
         }
     });
 
@@ -290,5 +307,6 @@ pub fn jxl_multithreading_benchmark(c: &mut Criterion) {
 }
 // criterion_group!(benches, thumbnail_load_benchmark);
 // criterion_group!(benches, file_load_benchmark);
-criterion_group!(benches, jxl_multithreading_benchmark);
+// criterion_group!(benches, jxl_multithreading_benchmark);
+criterion_group!(benches, thumbnail_check_benchmark);
 criterion_main!(benches);
