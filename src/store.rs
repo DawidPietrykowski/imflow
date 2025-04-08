@@ -171,6 +171,7 @@ impl ImageStore {
                 .get(&self.current_image_path)
                 .unwrap();
         }
+        // panic!();
 
         let buf = load_thumbnail(&self.current_image_path);
         self.loaded_images_thumbnails

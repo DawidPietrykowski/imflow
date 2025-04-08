@@ -8,17 +8,26 @@ use jpegxl_rs::decode::PixelFormat;
 use jpegxl_rs::decoder_builder;
 use libheif_rs::{HeifContext, LibHeif, RgbChroma};
 use rexiv2::Metadata;
+use sha2::Digest;
+use sha2::Sha256;
+use sha2::digest::consts::U32;
+use sha2::digest::generic_array::GenericArray;
 use zune_image::codecs::jpeg::JpegDecoder;
 use zune_image::codecs::qoi::zune_core::colorspace::ColorSpace;
 use zune_image::codecs::qoi::zune_core::options::DecoderOptions;
 
+use std::env;
 use std::fs;
 use std::fs::File;
 use std::fs::read;
+use std::hash::Hash;
 use std::io::BufReader;
 use std::io::Cursor;
+use std::io::Read;
+use std::io::Write;
 use std::mem;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Instant;
 
 #[derive(Clone, Eq, Hash, PartialEq, PartialOrd)]
@@ -28,14 +37,43 @@ pub enum ImageFormat {
     Heif,
 }
 
-#[derive(Clone, Eq, Hash, PartialEq)]
+#[derive(Clone)]
 pub struct ImageData {
     pub path: PathBuf,
     pub format: ImageFormat,
     pub embedded_thumbnail: bool,
     pub orientation: Orientation,
+    pub hash: GenericArray<u8, U32>,
 }
 
+impl ImageData {
+    pub fn get_cache_path(&self) -> PathBuf {
+        let home_dir = PathBuf::from_str(&env::var("HOME").unwrap()).unwrap();
+        let cache_dir = home_dir.join(".cache/imflow");
+        if !cache_dir.exists() {
+            fs::create_dir(&cache_dir).unwrap();
+        }
+        let hash_hex = format!("{:x}", self.hash);
+        return cache_dir.join(hash_hex).to_path_buf();
+    }
+}
+
+impl Hash for ImageData {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write(self.path.to_str().unwrap().as_bytes());
+        state.write(self.hash.as_slice());
+    }
+}
+
+impl PartialEq for ImageData {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash.eq(&other.hash)
+    }
+}
+
+impl Eq for ImageData {}
+
+#[derive(Clone)]
 pub struct ImflowImageBuffer {
     pub width: usize,
     pub height: usize,
@@ -213,14 +251,23 @@ pub fn load_available_images(dir: PathBuf) -> Vec<ImageData> {
             if let Some(format) = get_format(&path) {
                 let meta = Metadata::new_from_path(&path)
                     .expect(&format!("Image has no metadata: {:?}", path).to_string());
-                let embedded_thumbnail = meta.get_preview_images().is_some();
+                let embedded_thumbnail = if format == ImageFormat::Heif {
+                    let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
+                    let binding = ctx.top_level_image_handles();
+                    let handle = binding.get(0).unwrap();
+                    handle.number_of_thumbnails() > 0
+                } else {
+                    meta.get_preview_images().is_some()
+                };
                 let orientation = Orientation::from_exif(meta.get_orientation() as u8)
                     .unwrap_or(Orientation::NoTransforms);
+                let hash = get_file_hash(&path);
                 Some(ImageData {
                     path,
                     format,
                     embedded_thumbnail,
                     orientation,
+                    hash,
                 })
             } else {
                 None
@@ -253,13 +300,39 @@ pub fn get_embedded_thumbnail(image: &ImageData) -> Option<Vec<u8>> {
 }
 
 pub fn load_thumbnail(path: &ImageData) -> ImflowImageBuffer {
-    if path.format == ImageFormat::Heif {
-        return load_heif(path, true);
+    let cache_path = path.get_cache_path();
+    if cache_path.exists() {
+        let bytes = fs::read(cache_path).unwrap();
+        let width = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+        let height = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        let buffer: &[u8] = &bytes[8..];
+        let mut buffer_u8 = buffer.to_vec();
+        let buffer_u32 = unsafe {
+            Vec::from_raw_parts(
+                buffer_u8.as_mut_ptr() as *mut u32,
+                buffer_u8.len() / 4,
+                buffer_u8.len() / 4,
+            )
+        };
+        std::mem::forget(buffer_u8);
+
+        assert_eq!(width * height, buffer_u32.len());
+
+        return ImflowImageBuffer {
+            width,
+            height,
+            rgba_buffer: buffer_u32,
+            rating: 0,
+        };
     }
-    match load_thumbnail_exif(path) {
-        Some(thumbnail) => return thumbnail,
-        None => load_thumbnail_full(path),
-    }
+    let thumbnail = if path.format == ImageFormat::Heif {
+        load_heif(path, true)
+    } else {
+        load_thumbnail_exif(path).unwrap_or(load_thumbnail_full(path))
+    };
+
+    save_thumbnail(&cache_path, thumbnail.clone());
+    thumbnail
 }
 
 pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
@@ -268,8 +341,9 @@ pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
             let decoder = image::ImageReader::new(Cursor::new(thumbnail))
                 .with_guessed_format()
                 .unwrap();
-            let image = decoder.decode().unwrap();
+            let mut image = decoder.decode().unwrap();
 
+            image.apply_orientation(path.orientation);
             let width: usize = image.width() as usize;
             let height: usize = image.height() as usize;
             let flat = image.into_rgba8().into_raw();
@@ -281,6 +355,7 @@ pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
                     buffer.len() / 4,
                 )
             };
+            std::mem::forget(buffer);
 
             let rating = get_rating(path.into());
 
@@ -303,7 +378,7 @@ pub fn load_thumbnail_full(path: &ImageData) -> ImflowImageBuffer {
         .unwrap()
         .decode()
         .unwrap()
-        .resize(640, 480, FilterType::Nearest);
+        .resize_to_fill(1920, 1920, FilterType::Lanczos3);
     let width = image.width() as usize;
     let height = image.height() as usize;
     let buffer = image_to_rgba_buffer(image);
@@ -320,25 +395,47 @@ pub fn load_thumbnail_full(path: &ImageData) -> ImflowImageBuffer {
 pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     let lib_heif = LibHeif::new();
     let ctx = HeifContext::read_from_file(path.path.to_str().unwrap()).unwrap();
-    let handle = ctx.primary_image_handle().unwrap();
-    let mut image = lib_heif
-        .decode(&handle, libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba), None)
-        .unwrap();
+
+    let image = if resize {
+        let binding = ctx.top_level_image_handles();
+        let handle = binding.get(0).unwrap();
+        let thumbnail_count = handle.number_of_thumbnails() as u32;
+        let mut thumbnail_ids = vec![0u32, thumbnail_count];
+        handle.thumbnail_ids(&mut thumbnail_ids);
+        let handle = &handle.thumbnail(thumbnail_ids[0]).unwrap();
+
+        lib_heif
+            .decode(handle, libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba), None)
+            .unwrap()
+    } else {
+        let binding = ctx.top_level_image_handles();
+        let handle = binding.get(0).unwrap();
+
+        lib_heif
+            .decode(handle, libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba), None)
+            .unwrap()
+    };
 
     assert_eq!(
         image.color_space(),
         Some(libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba)),
     );
 
-    // Scale the image
-    if resize {
-        image = image.scale(640, 480, None).unwrap();
-        assert_eq!(image.width(), 640);
-        assert_eq!(image.height(), 480);
-    }
-
     let width = image.width() as usize;
     let height = image.height() as usize;
+
+    // Scale the image
+    // if resize {
+    //     const MAX: usize = 3000;
+    //     let scale = max(width, height) as f32 / MAX as f32;
+    //     width = (width as f32 / scale) as usize;
+    //     height = (height as f32 / scale) as usize;
+    //     // image = image.scale(width as u32, height as u32, None).unwrap();
+    //     image = image.scale(599, 300, None).unwrap();
+    //     width = image.width() as usize;
+    //     height = image.height() as usize;
+    // }
+
     let rating = get_rating(path);
 
     // Get "pixels"
@@ -346,6 +443,7 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     let interleaved_plane = planes.interleaved.unwrap();
     assert!(!interleaved_plane.data.is_empty());
     assert!(interleaved_plane.stride > 0);
+    assert_eq!(interleaved_plane.storage_bits_per_pixel, 32);
 
     let rgba_buffer = interleaved_plane.data;
     let u32_slice = unsafe {
@@ -358,4 +456,36 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
         rgba_buffer: u32_slice.to_vec(),
         rating,
     }
+}
+
+pub fn get_file_hash(path: &PathBuf) -> GenericArray<u8, U32> {
+    let mut file = File::open(path).unwrap();
+    let mut buf = [0u8; 16 * 1024];
+    file.read(&mut buf).unwrap();
+    let mut hasher = Sha256::new();
+    hasher.update(&buf);
+    hasher.update(file.metadata().unwrap().len().to_le_bytes());
+    hasher.finalize()
+}
+
+// TODO: optimize
+pub fn save_thumbnail(path: &PathBuf, image: ImflowImageBuffer) {
+    let cache_dir = path.parent().unwrap();
+    if !cache_dir.exists() {
+        fs::create_dir(cache_dir).unwrap();
+    }
+    println!("path: {:?}", path);
+    let mut file = File::create(path).unwrap();
+    let buffer = image.rgba_buffer;
+    let u8_buffer = unsafe {
+        Vec::from_raw_parts(
+            buffer.as_ptr() as *mut u8,
+            buffer.len() * 4,
+            buffer.len() * 4,
+        )
+    };
+    std::mem::forget(buffer);
+    file.write(&(image.width as u32).to_le_bytes()).unwrap();
+    file.write(&(image.height as u32).to_le_bytes()).unwrap();
+    file.write(&u8_buffer).unwrap();
 }
