@@ -645,6 +645,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-channel"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1433,6 +1442,7 @@ dependencies = [
  "bytemuck",
  "clap 4.5.34",
  "criterion",
+ "crossbeam-channel",
  "egui",
  "egui-wgpu",
  "egui-winit",
@@ -1441,10 +1451,12 @@ dependencies = [
  "jpegxl-rs",
  "libheif-rs",
  "pollster",
+ "rayon",
  "rexiv2",
  "sha2",
  "threadpool",
  "winit",
+ "zerocopy 0.8.24",
  "zune-image",
 ]
 

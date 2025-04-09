@@ -1,24 +1,25 @@
 use crate::image::{ImageData, load_thumbnail};
 use crate::image::{ImflowImageBuffer, load_available_images, load_image};
+use crossbeam_channel::{Receiver, Sender, unbounded};
+use rayon::prelude::*;
 use rexiv2::Metadata;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::time::Instant;
 use threadpool::ThreadPool;
 
 const PRELOAD_NEXT_IMAGE_N: usize = 16;
 
 pub struct ImageStore {
-    pub(crate) current_image_id: usize,
+    pub current_image_id: usize,
     pub(crate) loaded_images: HashMap<ImageData, ImflowImageBuffer>,
     pub(crate) loaded_images_thumbnails: HashMap<ImageData, ImflowImageBuffer>,
-    pub(crate) available_images: Vec<ImageData>,
+    pub available_images: Vec<ImageData>,
     pub current_image_path: ImageData,
     pub(crate) pool: ThreadPool,
-    pub(crate) loader_rx: mpsc::Receiver<(ImageData, ImflowImageBuffer)>,
-    pub(crate) loader_tx: mpsc::Sender<(ImageData, ImflowImageBuffer)>,
+    pub(crate) loader_rx: Receiver<(ImageData, ImflowImageBuffer)>,
+    pub(crate) loader_tx: Sender<(ImageData, ImflowImageBuffer)>,
     pub(crate) currently_loading: HashSet<ImageData>,
 }
 
@@ -26,27 +27,33 @@ impl ImageStore {
     pub fn new(path: PathBuf) -> Self {
         let current_image_id: usize = 0;
         let mut loaded_images: HashMap<ImageData, ImflowImageBuffer> = HashMap::new();
-        let mut loaded_thumbnails: HashMap<ImageData, ImflowImageBuffer> = HashMap::new();
+        // let mut loaded_thumbnails: HashMap<ImageData, ImflowImageBuffer> = HashMap::new();
         let available_images = load_available_images(path);
         let new_path = available_images[0].clone();
 
-        let (loader_tx, loader_rx) = mpsc::channel();
+        let (loader_tx, loader_rx) = unbounded();
 
         let pool = ThreadPool::new(32);
 
         let currently_loading = HashSet::new();
 
+        let first_image_path = available_images[0].clone();
+        let first_image_thread = std::thread::spawn(move || {
+            let image = load_image(&first_image_path);
+            (first_image_path, image)
+        });
+
         let total_start = Instant::now();
-        let mut loaded = 0;
-        let to_load = available_images.len();
-        for path in &available_images {
-            if path.embedded_thumbnail {
-                let buf = load_thumbnail(path);
-                loaded_thumbnails.insert(path.clone(), buf);
-                println!("Loaded embedded thumbnail for: {}/{}", loaded, to_load);
-            }
-            loaded += 1;
-        }
+        let (sender, receiver) = unbounded();
+        available_images
+            .par_iter()
+            .for_each_with(sender, |s, path| {
+                if path.embedded_thumbnail {
+                    let buf = load_thumbnail(path);
+                    s.send((path.clone(), buf)).unwrap();
+                }
+            });
+        let loaded_thumbnails: HashMap<_, _> = receiver.iter().collect();
         let total_time = total_start.elapsed();
         println!(
             "all thumbnails load time: {:?} for {}",
@@ -54,8 +61,10 @@ impl ImageStore {
             loaded_thumbnails.len()
         );
 
-        let path = available_images[0].clone();
-        let image = load_image(&path.clone());
+        // let path = available_images[0].clone();
+        // let image = load_image(&path.clone());
+        // loaded_images.insert(path, image);
+        let (path, image) = first_image_thread.join().unwrap();
         loaded_images.insert(path, image);
         let mut state = Self {
             current_image_id,
@@ -121,6 +130,7 @@ impl ImageStore {
     }
 
     pub fn request_load(&mut self, path: ImageData) {
+        // return;
         if self.loaded_images.contains_key(&path) || self.currently_loading.contains(&path) {
             return;
         }
@@ -159,6 +169,11 @@ impl ImageStore {
 
     pub fn get_image(&self, path: &ImageData) -> Option<&ImflowImageBuffer> {
         self.loaded_images.get(path)
+    }
+
+    pub fn get_thumbnail_id(&self, id: usize) -> &ImflowImageBuffer {
+        let path = self.available_images.get(id).unwrap();
+        self.loaded_images_thumbnails.get(path).unwrap()
     }
 
     pub fn get_thumbnail(&mut self) -> &ImflowImageBuffer {

@@ -1,11 +1,16 @@
 use crate::egui_tools::EguiRenderer;
-use egui::{Event, Key, PointerButton};
+use egui::load::{ImageLoadResult, ImageLoader};
+use egui::{Align2, Color32, ColorImage, Event, ImageSource, Key, PointerButton};
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu};
+use image::metadata::Orientation;
+use imflow::image::swap_wh;
 use imflow::store::ImageStore;
+use std::cmp::{max, min};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::exit;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use wgpu::util::DeviceExt;
 use wgpu::{PipelineCompilationOptions, SurfaceConfiguration};
 use winit::application::ApplicationHandler;
@@ -15,14 +20,13 @@ use winit::event_loop::ActiveEventLoop;
 use winit::platform::x11::WindowAttributesExtX11;
 use winit::window::{Window, WindowId};
 
-// Uniforms for transformations
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Transforms {
     transform: [f32; 16], // 4x4 matrix
     width: u32,
     height: u32,
-    _padding1: u32,
+    orientation: u32,
     _padding2: u32,
 }
 
@@ -32,6 +36,7 @@ pub(crate) struct TransformData {
     zoom: f32,
     width: u32,
     height: u32,
+    orientation: Orientation,
 }
 
 #[rustfmt::skip]
@@ -212,7 +217,7 @@ pub struct AppState {
     pub surface: wgpu::Surface<'static>,
     pub scale_factor: f32,
     pub egui_renderer: EguiRenderer,
-    pub store: ImageStore,
+    pub store: Arc<RwLock<ImageStore>>,
     pub image_texture: wgpu::Texture,
     pub bind_group: wgpu::BindGroup,
     pub render_pipeline: wgpu::RenderPipeline,
@@ -276,9 +281,13 @@ impl AppState {
 
         let egui_renderer = EguiRenderer::new(&device, surface_config.format, None, 1, window);
 
-        let scale_factor = 1.0;
+        let store = Arc::new(RwLock::new(ImageStore::new(path)));
 
-        let store = ImageStore::new(path);
+        let loader = ImflowEguiLoader::new(store.clone());
+
+        egui_renderer.context().add_image_loader(Arc::new(loader));
+
+        let scale_factor = 1.0;
 
         let (image_texture, bind_group, render_pipeline, transform_buffer) =
             // setup_texture(&device, surface_config.clone(), 6000, 4000);
@@ -290,6 +299,7 @@ impl AppState {
             zoom: 1.0,
             width: 10000,
             height: 10000,
+            orientation: Orientation::NoTransforms,
         };
 
         Self {
@@ -313,6 +323,10 @@ impl AppState {
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
     }
+
+    // fn get_store(&mut self) -> &ImageStore {
+    //     &self.store.lock().unwrap()
+    // }
 }
 
 pub struct App {
@@ -358,7 +372,7 @@ impl App {
         self.window.get_or_insert(window);
         self.state.get_or_insert(state);
 
-        self.pan_zoom(0.0, 0.0, 0.0);
+        self.reset_transform();
         self.update_texture();
     }
 
@@ -372,52 +386,60 @@ impl App {
     pub fn update_texture(&mut self) {
         let state = self.state.as_mut().unwrap();
 
-        state.store.check_loaded_images();
-        let imbuf = if let Some(full) = state.store.get_current_image() {
-            full
-        } else {
-            state.store.get_thumbnail()
-        };
-        let width = imbuf.width as u32;
-        let height = imbuf.height as u32;
-        let buffer_u8 = unsafe {
-            std::slice::from_raw_parts(
-                imbuf.rgba_buffer.as_ptr() as *const u8,
-                imbuf.rgba_buffer.len() * 4,
-            )
-        };
+        {
+            let mut store = state.store.write().unwrap();
+            store.check_loaded_images();
+            let imbuf = if let Some(full) = store.get_current_image() {
+                full
+            } else {
+                store.get_thumbnail()
+            };
+            let width = imbuf.width as u32;
+            let height = imbuf.height as u32;
+            let buffer_u8 = unsafe {
+                std::slice::from_raw_parts(
+                    imbuf.rgba_buffer.as_ptr() as *const u8,
+                    imbuf.rgba_buffer.len() * 4,
+                )
+            };
 
-        state.transform_data.width = width;
-        state.transform_data.height = height;
+            state.transform_data.width = width;
+            state.transform_data.height = height;
+            state.transform_data.orientation = imbuf.orientation;
 
-        state.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &state.image_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &buffer_u8,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * width), // 4 bytes per ARGB pixel
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
+            state.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &state.image_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &buffer_u8,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * width), // 4 bytes per ARGB pixel
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
 
-        self.pan_zoom(0.0, 0.0, 0.0);
+        self.update_transform();
     }
 
     fn update_transform(&mut self) {
         let state = self.state.as_mut().unwrap();
 
-        let image_aspect_ratio =
-            (state.transform_data.width as f32) / (state.transform_data.height as f32);
+        let (width, height) = swap_wh(
+            state.transform_data.width,
+            state.transform_data.height,
+            state.transform_data.orientation,
+        );
+        let image_aspect_ratio = (width as f32) / (height as f32);
         let window_size = self.window.as_ref().unwrap().inner_size();
         let window_aspect_ratio = window_size.width as f32 / window_size.height as f32;
         let mut scale_x = 1.0;
@@ -433,9 +455,9 @@ impl App {
             0,
             bytemuck::cast_slice(&[Transforms {
                 transform,
-                width: state.transform_data.width,
-                height: state.transform_data.height,
-                _padding1: 0,
+                width: width as u32,
+                height: height as u32,
+                orientation: state.transform_data.orientation as u32,
                 _padding2: 0,
             }]),
         );
@@ -603,10 +625,21 @@ impl App {
             render_pass.draw_indexed(0..6, 0, 0..1);
         }
 
-        let rating = state.store.get_current_rating();
-        let path = state.store.current_image_path.clone();
-        let filename = path.path.file_name().unwrap();
-        let window = self.window.as_ref().unwrap();
+        let rating;
+        let path;
+        let current_id;
+        let image_count;
+        let filename;
+        let window;
+        {
+            let store = state.store.read().unwrap();
+            rating = store.get_current_rating();
+            path = store.current_image_path.clone();
+            current_id = store.current_image_id;
+            image_count = store.available_images.len();
+            filename = path.path.file_name().unwrap();
+            window = self.window.as_ref().unwrap();
+        }
         {
             state.egui_renderer.begin_frame(window);
 
@@ -617,7 +650,7 @@ impl App {
                 .show(state.egui_renderer.context(), |ui| {
                     ui.vertical_centered(|ui| {
                         ui.label(
-                            egui::RichText::new(format!("{:.1}", rating))
+                            egui::RichText::new(format!("{}", rating))
                                 .size(42.0)
                                 .strong(),
                         );
@@ -626,6 +659,59 @@ impl App {
                                 .size(10.0)
                                 .strong(),
                         );
+                    });
+                });
+            egui::Window::new("Id")
+                .collapsible(false)
+                .resizable(false)
+                .default_width(5.0)
+                .anchor(Align2::RIGHT_TOP, [-5.0, 5.0])
+                .pivot(Align2::RIGHT_TOP)
+                .show(state.egui_renderer.context(), |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("{}/{}", current_id, image_count))
+                                .size(22.0)
+                                .strong(),
+                        );
+                    });
+                });
+
+            egui::Window::new("Images")
+                .collapsible(false)
+                .resizable(false)
+                .default_width(500.0)
+                .default_height(300.0)
+                .anchor(Align2::CENTER_BOTTOM, [0.0, 10.0])
+                .pivot(Align2::CENTER_BOTTOM)
+                .show(state.egui_renderer.context(), |ui| {
+                    ui.horizontal(|ui| {
+                        // ui.label(
+                        //     egui::RichText::new(format!("{}/{}", current_id, image_count))
+                        //         .size(22.0)
+                        //         .strong(),
+                        // );
+
+                        const NUM: i32 = 5;
+                        for i in max((current_id as i32) - NUM, 0)
+                            ..min((current_id as i32) + NUM + 1, image_count as i32)
+                        {
+                            let source = ImageSource::Bytes {
+                                uri: std::borrow::Cow::Owned(i.to_string()),
+                                bytes: egui::load::Bytes::Static(&[]),
+                            };
+
+                            ui.add(
+                                egui::Image::new(source)
+                                    // .sca
+                                    // .load_for_size(ctx, available_size)
+                                    // .fit_to_fraction(Vec2::new(10.0, 10.0))
+                                    // .max_width(200.0)
+                                    .fit_to_original_size(1.0)
+                                    .corner_radius(10),
+                            );
+                        }
+                        // ui.image(source);
                     });
                 });
 
@@ -668,64 +754,80 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 self.handle_redraw();
-                let (events, _keys_down, pointer) = self
+                let (events, _keys_down, pointer, scroll) = self
                     .state
                     .as_ref()
                     .unwrap()
                     .egui_renderer
                     .context()
-                    .input(|i| (i.events.clone(), i.keys_down.clone(), i.pointer.clone()));
+                    .input(|i| {
+                        (
+                            i.events.clone(),
+                            i.keys_down.clone(),
+                            i.pointer.clone(),
+                            i.smooth_scroll_delta.clone(),
+                        )
+                    });
 
-                events.iter().for_each(|e| {
-                    if let Event::Key { key, pressed, .. } = e {
-                        if !*pressed {
-                            return;
+                let mut updated_image = false;
+                let mut reset_transform = false;
+                {
+                    let mut store = self.state.as_mut().unwrap().store.write().unwrap();
+                    events.iter().for_each(|e| {
+                        if let Event::Key { key, pressed, .. } = e {
+                            if !*pressed {
+                                return;
+                            }
+                            match *key {
+                                Key::ArrowLeft => {
+                                    store.next_image(-1);
+                                    updated_image = true;
+                                }
+                                Key::ArrowRight => {
+                                    store.next_image(1);
+                                    updated_image = true;
+                                }
+                                Key::ArrowUp => {
+                                    let rating = store.get_current_rating();
+                                    store.set_rating(rating + 1);
+                                }
+                                Key::ArrowDown => {
+                                    let rating = store.get_current_rating();
+                                    store.set_rating(rating - 1);
+                                }
+                                Key::Backtick => store.set_rating(0),
+                                Key::Num0 => store.set_rating(0),
+                                Key::Num1 => store.set_rating(1),
+                                Key::Num2 => store.set_rating(2),
+                                Key::Num3 => store.set_rating(3),
+                                Key::Num4 => store.set_rating(4),
+                                Key::Num5 => store.set_rating(5),
+                                Key::Escape => exit(0),
+                                _ => {}
+                            }
+                        } else if let Event::PointerButton {
+                            button, pressed, ..
+                        } = e
+                        {
+                            if *pressed && *button == PointerButton::Secondary {
+                                reset_transform = true;
+                            }
                         }
-                        match *key {
-                            Key::ArrowLeft => {
-                                self.state.as_mut().unwrap().store.next_image(-1);
-                                self.update_texture();
-                            }
-                            Key::ArrowRight => {
-                                self.state.as_mut().unwrap().store.next_image(1);
-                                self.update_texture();
-                            }
-                            Key::ArrowUp => {
-                                let rating =
-                                    self.state.as_mut().unwrap().store.get_current_rating();
-                                self.state.as_mut().unwrap().store.set_rating(rating + 1);
-                            }
-                            Key::ArrowDown => {
-                                let rating =
-                                    self.state.as_mut().unwrap().store.get_current_rating();
-                                self.state.as_mut().unwrap().store.set_rating(rating - 1);
-                            }
-                            Key::Backtick => self.state.as_mut().unwrap().store.set_rating(0),
-                            Key::Num0 => self.state.as_mut().unwrap().store.set_rating(0),
-                            Key::Num1 => self.state.as_mut().unwrap().store.set_rating(1),
-                            Key::Num2 => self.state.as_mut().unwrap().store.set_rating(2),
-                            Key::Num3 => self.state.as_mut().unwrap().store.set_rating(3),
-                            Key::Num4 => self.state.as_mut().unwrap().store.set_rating(4),
-                            Key::Num5 => self.state.as_mut().unwrap().store.set_rating(5),
-                            Key::Escape => exit(0),
-                            _ => {}
-                        }
-                    } else if let Event::MouseWheel { delta, .. } = e {
-                        self.pan_zoom(delta.y * 0.2, 0.0, 0.0);
-                    } else if let Event::PointerButton {
-                        button, pressed, ..
-                    } = e
-                    {
-                        if *pressed && *button == PointerButton::Secondary {
-                            self.reset_transform();
-                        }
-                    }
-                });
-
+                    });
+                }
                 if pointer.primary_down() && pointer.is_moving() {
                     self.pan_zoom(0.0, pointer.delta().x * 0.001, pointer.delta().y * -0.001);
                 }
+                if scroll.y != 0.0 {
+                    self.pan_zoom(scroll.y * 0.01, 0.0, 0.0);
+                }
 
+                if updated_image {
+                    self.update_texture();
+                }
+                if reset_transform {
+                    self.reset_transform();
+                }
                 self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::Resized(new_size) => {
@@ -733,5 +835,72 @@ impl ApplicationHandler for App {
             }
             _ => (),
         }
+    }
+}
+
+pub struct ImflowEguiLoader {
+    store: Arc<RwLock<ImageStore>>,
+    // stored: Option<ImageLoadResult>,
+    cache: egui::mutex::Mutex<HashMap<usize, ImageLoadResult>>,
+}
+
+impl ImflowEguiLoader {
+    pub fn new(store: Arc<RwLock<ImageStore>>) -> ImflowEguiLoader {
+        ImflowEguiLoader {
+            store,
+            cache: egui::mutex::Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl ImageLoader for ImflowEguiLoader {
+    fn id(&self) -> &str {
+        "ImflowEguiLoader"
+    }
+
+    fn load(
+        &self,
+        _ctx: &egui::Context,
+        uri: &str,
+        _size_hint: egui::SizeHint,
+    ) -> egui::load::ImageLoadResult {
+        let mut cache = self.cache.lock();
+
+        let id = uri.parse::<usize>().unwrap();
+        if let Some(handle) = cache.get(&id) {
+            handle.clone()
+        } else {
+            let imbuf = {
+                let binding = self.store.read().unwrap();
+                binding.get_thumbnail_id(id).clone()
+            };
+            let mut image = ColorImage::new([imbuf.width, imbuf.height], Color32::BLACK);
+            let image_buffer = image.as_raw_mut();
+            for (i, &value) in imbuf.rgba_buffer.iter().enumerate() {
+                let bytes = value.to_le_bytes();
+                let start = i * 4;
+                image_buffer[start..start + 4].copy_from_slice(&bytes);
+            }
+
+            let res = ImageLoadResult::Ok(egui::load::ImagePoll::Ready {
+                image: Arc::new(ColorImage {
+                    size: [imbuf.width, imbuf.height],
+                    pixels: image.pixels,
+                }),
+            });
+            cache.insert(id, res.clone());
+            res.clone()
+        }
+    }
+
+    // TODO
+    fn forget(&self, _uri: &str) {}
+
+    // TODO
+    fn forget_all(&self) {}
+
+    // TODO
+    fn byte_size(&self) -> usize {
+        todo!()
     }
 }

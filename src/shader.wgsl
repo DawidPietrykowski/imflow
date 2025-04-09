@@ -1,7 +1,8 @@
 struct Transforms {
     transform: mat4x4<f32>,
     width: u32,
-    height: u32
+    height: u32,
+    orientation: u32
 };
 @group(0) @binding(2) var<uniform> transforms: Transforms;
 
@@ -26,11 +27,24 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 @group(0) @binding(0) var texture: texture_2d<f32>;
 @group(0) @binding(1) var texture_sampler: sampler;
 
+fn reverse(in: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(in.y, in.x);
+}
+
 @fragment
-fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-    let texture_size = vec2<f32>(f32(transforms.width), f32(transforms.height));
+fn fs_main(@location(0) in: vec2<f32>) -> @location(0) vec4<f32> {
+    var texture_size = vec2<f32>(f32(transforms.width), f32(transforms.height));
     let out_dim = vec2<f32>(textureDimensions(texture));
+    var uv = in;
+    if transforms.orientation == 2 {
+        uv.x = 1.0-uv.x;
+    } else if transforms.orientation == 3 {
+        uv.y = 1.0-uv.y;
+    }
     let scale = texture_size / out_dim;
-    let pixel = uv * scale;
+    var pixel = uv * scale;
+    if transforms.orientation == 3 {
+        pixel = reverse(pixel);
+    }
     return textureSample(texture, texture_sampler, pixel);
 }
