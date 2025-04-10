@@ -43,6 +43,13 @@ fn fs_main(@location(0) in: vec2<f32>) -> @location(0) vec4<f32> {
     }
     let scale = texture_size / out_dim;
     var pixel = uv * scale;
+
+    // add offset to remove bleed from uncleared buffer
+    let half_texel = vec2<f32>(0.5) / out_dim;
+    let min_uv = half_texel;
+    let max_uv = scale - half_texel;
+    pixel = clamp(pixel, min_uv, max_uv);
+
     if transforms.orientation == 3 {
         pixel = reverse(pixel);
     }

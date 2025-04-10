@@ -329,9 +329,10 @@ pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
         let decoder = image::ImageReader::new(Cursor::new(thumbnail))
             .with_guessed_format()
             .unwrap();
-        let image = decoder.decode().unwrap();
+        let mut image = decoder.decode().unwrap();
 
         let orientation = path.orientation;
+        image.apply_orientation(orientation);
         let width: usize = image.width() as usize;
         let height: usize = image.height() as usize;
         let rgba_buffer = image_to_rgba_buffer(image);

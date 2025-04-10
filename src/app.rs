@@ -434,6 +434,10 @@ impl App {
     fn update_transform(&mut self) {
         let state = self.state.as_mut().unwrap();
 
+        // TODO: Remove obviously
+        if state.transform_data.width < 800 {
+            state.transform_data.orientation = Orientation::NoTransforms;
+        }
         let (width, height) = swap_wh(
             state.transform_data.width,
             state.transform_data.height,
