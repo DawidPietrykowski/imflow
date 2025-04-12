@@ -18,6 +18,8 @@ use zune_image::codecs::qoi::zune_core::colorspace::ColorSpace;
 use zune_image::codecs::qoi::zune_core::options::DecoderOptions;
 
 use std::env;
+use std::fmt::Display;
+// use std::fmt::Write;
 use std::fs;
 use std::fs::File;
 use std::fs::read;
@@ -37,6 +39,16 @@ pub enum ImageFormat {
     Heif,
 }
 
+impl Display for ImageFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImageFormat::Jpg => f.write_str("JPG"),
+            ImageFormat::Jxl => f.write_str("JXL"),
+            ImageFormat::Heif => f.write_str("HEIF"),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ImageData {
     pub path: PathBuf,
@@ -44,6 +56,7 @@ pub struct ImageData {
     pub embedded_thumbnail: bool,
     pub orientation: Orientation,
     pub hash: GenericArray<u8, U32>,
+    pub rating: i32,
 }
 
 impl ImageData {
@@ -55,6 +68,10 @@ impl ImageData {
         }
         let hash_hex = format!("{:x}", self.hash);
         return cache_dir.join(hash_hex).to_path_buf();
+    }
+
+    pub fn get_hash_str(&self) -> String {
+        format!("{:x}", self.hash)
     }
 }
 
@@ -253,12 +270,14 @@ pub fn load_available_images(dir: PathBuf) -> Vec<ImageData> {
                 let orientation = Orientation::from_exif(meta.get_orientation() as u8)
                     .unwrap_or(Orientation::NoTransforms);
                 let hash = get_file_hash(&path);
+                let rating = meta.get_tag_numeric("Xmp.xmp.Rating");
                 Some(ImageData {
                     path,
                     format,
                     embedded_thumbnail,
                     orientation,
                     hash,
+                    rating,
                 })
             } else {
                 None

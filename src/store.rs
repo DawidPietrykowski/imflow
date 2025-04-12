@@ -1,4 +1,4 @@
-use crate::image::{ImageData, load_thumbnail};
+use crate::image::{ImageData, ImageFormat, load_thumbnail};
 use crate::image::{ImflowImageBuffer, load_available_images, load_image};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use rayon::prelude::*;
@@ -10,6 +10,26 @@ use std::time::Instant;
 use threadpool::ThreadPool;
 
 const PRELOAD_NEXT_IMAGE_N: usize = 16;
+
+pub struct FileFilters {
+    pub rating: [bool; 6],
+    pub name: String,
+    pub file_format: HashMap<ImageFormat, bool>,
+}
+
+impl Default for FileFilters {
+    fn default() -> Self {
+        let mut formats = HashMap::new();
+        formats.insert(ImageFormat::Jpg, true);
+        formats.insert(ImageFormat::Jxl, true);
+        formats.insert(ImageFormat::Heif, true);
+        FileFilters {
+            rating: [true; 6],
+            name: "".to_string(),
+            file_format: formats,
+        }
+    }
+}
 
 pub struct ImageStore {
     pub current_image_id: usize,
@@ -176,6 +196,14 @@ impl ImageStore {
         self.loaded_images_thumbnails.get(path).unwrap()
     }
 
+    pub fn get_thumbnail_hash(&self, hash: String) -> &ImflowImageBuffer {
+        self.loaded_images_thumbnails
+            .iter()
+            .find(|f| f.0.get_hash_str() == hash)
+            .unwrap()
+            .1
+    }
+
     pub fn get_thumbnail(&mut self) -> &ImflowImageBuffer {
         if self
             .loaded_images_thumbnails
@@ -195,5 +223,22 @@ impl ImageStore {
             .loaded_images_thumbnails
             .get(&self.current_image_path)
             .unwrap();
+    }
+
+    pub fn get_filtered_images(&self, filter: &FileFilters) -> Vec<ImageData> {
+        self.available_images
+            .iter()
+            .filter(|f| filter.rating[f.rating.clamp(0, 5) as usize])
+            .filter(|f| filter.file_format[&f.format])
+            .filter(|f| {
+                f.path
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .contains(&filter.name)
+            })
+            .map(|f| f.clone())
+            .collect::<Vec<ImageData>>()
     }
 }

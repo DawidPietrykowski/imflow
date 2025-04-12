@@ -1,11 +1,11 @@
 use crate::egui_tools::EguiRenderer;
 use egui::load::{ImageLoadResult, ImageLoader};
-use egui::{Align2, Color32, ColorImage, Event, ImageSource, Key, PointerButton};
+use egui::{Align2, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Sense};
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::metadata::Orientation;
-use imflow::image::swap_wh;
-use imflow::store::ImageStore;
+use imflow::image::{ImageFormat, swap_wh};
+use imflow::store::{FileFilters, ImageStore};
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -223,6 +223,7 @@ pub struct AppState {
     pub render_pipeline: wgpu::RenderPipeline,
     pub transform_buffer: wgpu::Buffer,
     pub transform_data: TransformData,
+    pub filters: FileFilters,
 }
 
 impl AppState {
@@ -315,6 +316,7 @@ impl AppState {
             render_pipeline,
             transform_buffer,
             transform_data,
+            filters: FileFilters::default(),
         }
     }
 
@@ -629,18 +631,23 @@ impl App {
             render_pass.draw_indexed(0..6, 0, 0..1);
         }
 
+        let mut rating_filter = [false; 6];
+
+        // let mut file_filters;
         let rating;
         let path;
         let current_id;
         let image_count;
         let filename;
         let window;
+        let filtered_images;
         {
             let store = state.store.read().unwrap();
             rating = store.get_current_rating();
             path = store.current_image_path.clone();
             current_id = store.current_image_id;
             image_count = store.available_images.len();
+            filtered_images = store.get_filtered_images(&state.filters);
             filename = path.path.file_name().unwrap();
             window = self.window.as_ref().unwrap();
         }
@@ -665,59 +672,45 @@ impl App {
                         );
                     });
                 });
-            egui::Window::new("Id")
-                .collapsible(false)
-                .resizable(false)
-                .default_width(5.0)
-                .anchor(Align2::RIGHT_TOP, [-5.0, 5.0])
-                .pivot(Align2::RIGHT_TOP)
-                .show(state.egui_renderer.context(), |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!("{}/{}", current_id, image_count))
-                                .size(22.0)
-                                .strong(),
-                        );
+
+            egui::TopBottomPanel::bottom("Thumbnails")
+                .exact_height(120.0)
+                .show(state.egui_renderer.context(), |panel_ui| {
+                    egui::ScrollArea::horizontal().show(panel_ui, |ui| {
+                        ui.horizontal_centered(|horizontal| {
+                            for image in filtered_images {
+                                let source = ImageSource::Bytes {
+                                    uri: std::borrow::Cow::Owned(image.get_hash_str()),
+                                    bytes: egui::load::Bytes::Static(&[]),
+                                };
+
+                                let image_widget = horizontal.add(
+                                    egui::Image::new(source)
+                                        .fit_to_original_size(0.8)
+                                        .corner_radius(10)
+                                        .sense(Sense::click()),
+                                );
+                                if image_widget.clicked() {
+                                    image_widget.scroll_to_me(None);
+                                    // ui.scroll_to_rect(image_widget.rect, None);
+                                    println!("{}", image.get_hash_str());
+                                }
+                            }
+                        });
                     });
                 });
 
-            egui::Window::new("Images")
-                .collapsible(false)
-                .resizable(false)
-                .default_width(500.0)
-                .default_height(300.0)
-                .anchor(Align2::CENTER_BOTTOM, [0.0, 10.0])
-                .pivot(Align2::CENTER_BOTTOM)
-                .show(state.egui_renderer.context(), |ui| {
-                    ui.horizontal(|ui| {
-                        // ui.label(
-                        //     egui::RichText::new(format!("{}/{}", current_id, image_count))
-                        //         .size(22.0)
-                        //         .strong(),
-                        // );
+            egui::SidePanel::right("Filters").show(state.egui_renderer.context(), |ui| {
+                for (i, mut rating) in state.filters.rating.iter_mut().enumerate().rev() {
+                    ui.checkbox(&mut rating, format!("{} stars", i));
+                }
 
-                        const NUM: i32 = 5;
-                        for i in max((current_id as i32) - NUM, 0)
-                            ..min((current_id as i32) + NUM + 1, image_count as i32)
-                        {
-                            let source = ImageSource::Bytes {
-                                uri: std::borrow::Cow::Owned(i.to_string()),
-                                bytes: egui::load::Bytes::Static(&[]),
-                            };
+                ui.text_edit_singleline(&mut state.filters.name);
 
-                            ui.add(
-                                egui::Image::new(source)
-                                    // .sca
-                                    // .load_for_size(ctx, available_size)
-                                    // .fit_to_fraction(Vec2::new(10.0, 10.0))
-                                    // .max_width(200.0)
-                                    .fit_to_original_size(1.0)
-                                    .corner_radius(10),
-                            );
-                        }
-                        // ui.image(source);
-                    });
-                });
+                for (format, mut value) in state.filters.file_format.iter_mut() {
+                    ui.checkbox(&mut value, format!("{}", format));
+                }
+            });
 
             state.egui_renderer.end_frame_and_draw(
                 &state.device,
@@ -845,7 +838,7 @@ impl ApplicationHandler for App {
 pub struct ImflowEguiLoader {
     store: Arc<RwLock<ImageStore>>,
     // stored: Option<ImageLoadResult>,
-    cache: egui::mutex::Mutex<HashMap<usize, ImageLoadResult>>,
+    cache: egui::mutex::Mutex<HashMap<String, ImageLoadResult>>,
 }
 
 impl ImflowEguiLoader {
@@ -870,13 +863,14 @@ impl ImageLoader for ImflowEguiLoader {
     ) -> egui::load::ImageLoadResult {
         let mut cache = self.cache.lock();
 
-        let id = uri.parse::<usize>().unwrap();
+        // let id = uri.parse::<usize>().unwrap();
+        let id = uri.to_string();
         if let Some(handle) = cache.get(&id) {
             handle.clone()
         } else {
             let imbuf = {
                 let binding = self.store.read().unwrap();
-                binding.get_thumbnail_id(id).clone()
+                binding.get_thumbnail_hash(id.clone()).clone()
             };
             let mut image = ColorImage::new([imbuf.width, imbuf.height], Color32::BLACK);
             let image_buffer = image.as_raw_mut();
