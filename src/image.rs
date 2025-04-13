@@ -30,6 +30,8 @@ use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::thread::sleep;
+use std::time::Duration;
 use std::time::Instant;
 
 #[derive(Clone, Eq, Hash, PartialEq, PartialOrd)]
@@ -145,6 +147,7 @@ fn get_format(path: &PathBuf) -> Option<ImageFormat> {
 }
 
 pub fn load_image(image: &ImageData) -> ImflowImageBuffer {
+    // sleep(Duration::from_millis(500));
     let total_start = Instant::now();
 
     match image.format {
@@ -291,11 +294,18 @@ pub fn check_embedded_thumbnail(path: &PathBuf) -> bool {
 }
 
 pub fn get_embedded_thumbnail(image: &ImageData) -> Option<Vec<u8>> {
-    Metadata::new_from_path(&image.path)
-        .ok()?
-        .get_preview_images()?
-        .first()
-        .and_then(|preview| preview.get_data().ok())
+    let meta = Metadata::new_from_path(&image.path).ok()?;
+
+    let width = meta.get_pixel_width();
+    let height = meta.get_pixel_height();
+    println!("image: {}", width as f32 / height as f32);
+
+    meta.get_preview_images()?.first().and_then(|preview| {
+        let width = preview.get_width();
+        let height = preview.get_height();
+        println!("thumbnail: {}", width as f32 / height as f32);
+        preview.get_data().ok()
+    })
 }
 
 pub fn load_thumbnail(path: &ImageData) -> ImflowImageBuffer {

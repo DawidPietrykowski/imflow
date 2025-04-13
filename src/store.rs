@@ -56,11 +56,11 @@ impl ImageStore {
 
         let currently_loading = HashSet::new();
 
-        let first_image_path = available_images[0].clone();
-        let first_image_thread = std::thread::spawn(move || {
-            let image = load_image(&first_image_path);
-            (first_image_path, image)
-        });
+        // let first_image_path = available_images[0].clone();
+        // let first_image_thread = std::thread::spawn(move || {
+        //     let image = load_image(&first_image_path);
+        //     (first_image_path, image)
+        // });
 
         let total_start = Instant::now();
         let (sender, receiver) = unbounded();
@@ -80,8 +80,9 @@ impl ImageStore {
             loaded_thumbnails.len()
         );
 
-        let (path, image) = first_image_thread.join().unwrap();
-        loaded_images.insert(path, image);
+        let image = load_image(&new_path.clone());
+        // let (path, image) = first_image_thread.join().unwrap();
+        loaded_images.insert(new_path.clone(), image);
         let mut state = Self {
             current_image_id,
             loaded_images,

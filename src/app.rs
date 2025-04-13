@@ -227,6 +227,7 @@ pub struct AppState {
     pub transform_data: TransformData,
     pub filters: FileFilters,
     pub selected_image: ImageData,
+    pub loaded_thumbnail: bool,
 }
 
 impl AppState {
@@ -298,7 +299,6 @@ impl AppState {
         let scale_factor = 1.0;
 
         let (image_texture, bind_group, render_pipeline, transform_buffer) =
-            // setup_texture(&device, surface_config.clone(), 6000, 4000);
             setup_texture(&device, surface_config.clone(), 8192, 8192);
 
         let transform_data = TransformData {
@@ -325,6 +325,7 @@ impl AppState {
             transform_data,
             filters: FileFilters::default(),
             selected_image,
+            loaded_thumbnail: false,
         }
     }
 
@@ -383,7 +384,7 @@ impl App {
         self.state.get_or_insert(state);
 
         self.reset_transform();
-        self.update_texture();
+        self.update_texture(true);
     }
 
     fn handle_resized(&mut self, width: u32, height: u32) {
@@ -393,20 +394,30 @@ impl App {
         self.pan_zoom(0.0, 0.0, 0.0);
     }
 
-    pub fn update_texture(&mut self) {
+    pub fn update_texture(&mut self, force: bool) {
         let state = self.state.as_mut().unwrap();
+        if !force
         {
-            let store = state.store.read().unwrap();
-            if state.selected_image == store.current_image_path {
+            let mut store = state.store.write().unwrap();
+            store.check_loaded_images();
+            let current_image_selected = state.selected_image == store.current_image_path;
+            let current_quality_loaded =
+                state.loaded_thumbnail == store.get_current_image().is_none();
+            println!(
+                "check {} {}",
+                current_quality_loaded, current_image_selected
+            );
+            if current_image_selected && current_quality_loaded {
                 return;
             }
         }
         {
             let mut store = state.store.write().unwrap();
-            store.check_loaded_images();
             let imbuf = if let Some(full) = store.get_current_image() {
+                state.loaded_thumbnail = false;
                 full
             } else {
+                state.loaded_thumbnail = true;
                 store.get_thumbnail()
             };
             let width = imbuf.width as u32;
@@ -441,6 +452,7 @@ impl App {
                     depth_or_array_layers: 1,
                 },
             );
+            state.selected_image = store.current_image_path.clone();
         }
 
         self.update_transform();
@@ -710,6 +722,7 @@ impl App {
                                     image_widget.scroll_to_me(Some(Align::Center));
                                 }
                                 if image_widget.clicked() {
+                                    println!("{}", image.get_hash_str());
                                     selected_image = Some(image);
                                 }
                             }
@@ -746,7 +759,7 @@ impl App {
         state.queue.submit(Some(encoder.finish()));
         surface_texture.present();
 
-        self.update_texture();
+        self.update_texture(false);
     }
 }
 
@@ -843,7 +856,7 @@ impl ApplicationHandler for App {
                 }
 
                 if updated_image {
-                    self.update_texture();
+                    self.update_texture(false);
                 }
                 if reset_transform {
                     self.reset_transform();
