@@ -348,9 +348,19 @@ pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
         let decoder = image::ImageReader::new(Cursor::new(thumbnail))
             .with_guessed_format()
             .unwrap();
-        let mut image = decoder.decode().unwrap();
-
+        let image = decoder.decode().unwrap();
         let orientation = path.orientation;
+
+        let width = image.width();
+        let height = image.height();
+        // TODO: extract from image
+        let ratio_image = 1.5;
+        let ratio_thumbnail = width as f32 / height as f32;
+        let crop = ratio_thumbnail / ratio_image;
+        let start = ((0.5 - (crop / 2.0)) * height as f32).round();
+        let cropped_height = (height as f32 * crop) as u32;
+        let mut image = image.crop_imm(0, start as u32, width, cropped_height);
+
         image.apply_orientation(orientation);
         let width: usize = image.width() as usize;
         let height: usize = image.height() as usize;
@@ -457,7 +467,7 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
         rgba_buffer: u32_slice.to_vec(),
         rating,
         // TODO: verify
-        orientation: path.orientation,
+        orientation: Orientation::NoTransforms,
     }
 }
 

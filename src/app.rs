@@ -1,10 +1,12 @@
 use crate::egui_tools::EguiRenderer;
 use egui::load::{ImageLoadResult, ImageLoader};
-use egui::{Align2, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Sense};
+use egui::{
+    Align, Align2, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Sense,
+};
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::metadata::Orientation;
-use imflow::image::{ImageFormat, swap_wh};
+use imflow::image::{ImageData, ImageFormat, swap_wh};
 use imflow::store::{FileFilters, ImageStore};
 use std::cmp::{max, min};
 use std::collections::HashMap;
@@ -224,6 +226,7 @@ pub struct AppState {
     pub transform_buffer: wgpu::Buffer,
     pub transform_data: TransformData,
     pub filters: FileFilters,
+    pub selected_image: ImageData,
 }
 
 impl AppState {
@@ -282,7 +285,11 @@ impl AppState {
 
         let egui_renderer = EguiRenderer::new(&device, surface_config.format, None, 1, window);
 
-        let store = Arc::new(RwLock::new(ImageStore::new(path)));
+        let image_store = ImageStore::new(path);
+
+        // TODO: verify
+        let selected_image = image_store.current_image_path.clone();
+        let store = Arc::new(RwLock::new(image_store));
 
         let loader = ImflowEguiLoader::new(store.clone());
 
@@ -317,6 +324,7 @@ impl AppState {
             transform_buffer,
             transform_data,
             filters: FileFilters::default(),
+            selected_image,
         }
     }
 
@@ -387,7 +395,12 @@ impl App {
 
     pub fn update_texture(&mut self) {
         let state = self.state.as_mut().unwrap();
-
+        {
+            let store = state.store.read().unwrap();
+            if state.selected_image == store.current_image_path {
+                return;
+            }
+        }
         {
             let mut store = state.store.write().unwrap();
             store.check_loaded_images();
@@ -641,12 +654,15 @@ impl App {
         let filename;
         let window;
         let filtered_images;
+        let current_image;
+        let mut selected_image = None;
         {
             let store = state.store.read().unwrap();
             rating = store.get_current_rating();
             path = store.current_image_path.clone();
             current_id = store.current_image_id;
             image_count = store.available_images.len();
+            current_image = store.current_image_path.clone();
             filtered_images = store.get_filtered_images(&state.filters);
             filename = path.path.file_name().unwrap();
             window = self.window.as_ref().unwrap();
@@ -690,10 +706,11 @@ impl App {
                                         .corner_radius(10)
                                         .sense(Sense::click()),
                                 );
+                                if current_image == image {
+                                    image_widget.scroll_to_me(Some(Align::Center));
+                                }
                                 if image_widget.clicked() {
-                                    image_widget.scroll_to_me(None);
-                                    // ui.scroll_to_rect(image_widget.rect, None);
-                                    println!("{}", image.get_hash_str());
+                                    selected_image = Some(image);
                                 }
                             }
                         });
@@ -712,6 +729,10 @@ impl App {
                 }
             });
 
+            if let Some(selected_image) = selected_image {
+                state.store.write().unwrap().select_image(selected_image);
+            }
+
             state.egui_renderer.end_frame_and_draw(
                 &state.device,
                 &state.queue,
@@ -724,6 +745,8 @@ impl App {
 
         state.queue.submit(Some(encoder.finish()));
         surface_texture.present();
+
+        self.update_texture();
     }
 }
 

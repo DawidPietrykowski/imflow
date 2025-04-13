@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 use threadpool::ThreadPool;
 
-const PRELOAD_NEXT_IMAGE_N: usize = 16;
+const PRELOAD_NEXT_IMAGE_N: usize = 0;
 
 pub struct FileFilters {
     pub rating: [bool; 6],
@@ -47,7 +47,6 @@ impl ImageStore {
     pub fn new(path: PathBuf) -> Self {
         let current_image_id: usize = 0;
         let mut loaded_images: HashMap<ImageData, ImflowImageBuffer> = HashMap::new();
-        // let mut loaded_thumbnails: HashMap<ImageData, ImflowImageBuffer> = HashMap::new();
         let available_images = load_available_images(path);
         let new_path = available_images[0].clone();
 
@@ -68,10 +67,10 @@ impl ImageStore {
         available_images
             .par_iter()
             .for_each_with(sender, |s, path| {
-                if path.embedded_thumbnail {
-                    let buf = load_thumbnail(path);
-                    s.send((path.clone(), buf)).unwrap();
-                }
+                // if path.embedded_thumbnail {
+                let buf = load_thumbnail(path);
+                s.send((path.clone(), buf)).unwrap();
+                // }
             });
         let loaded_thumbnails: HashMap<_, _> = receiver.iter().collect();
         let total_time = total_start.elapsed();
@@ -81,9 +80,6 @@ impl ImageStore {
             loaded_thumbnails.len()
         );
 
-        // let path = available_images[0].clone();
-        // let image = load_image(&path.clone());
-        // loaded_images.insert(path, image);
         let (path, image) = first_image_thread.join().unwrap();
         loaded_images.insert(path, image);
         let mut state = Self {
@@ -125,16 +121,15 @@ impl ImageStore {
     }
 
     pub fn get_current_rating(&self) -> i32 {
-        let imbuf = if let Some(full) = self.get_current_image() {
-            // println!("full");
-            full
-        } else {
-            // TODO: this assumes loaded thumbnail
-            self.loaded_images_thumbnails
-                .get(&self.current_image_path)
-                .unwrap()
-        };
-        imbuf.rating
+        self.current_image_path.rating
+        // let imbuf = if let Some(full) = self.get_current_image() {
+        //     // println!("full");
+        //     full
+        // } else {
+        //     // TODO: this assumes loaded thumbnail
+
+        // };
+        // imbuf.rating
     }
 
     pub fn preload_next_images(&mut self, n: usize) {
@@ -150,7 +145,6 @@ impl ImageStore {
     }
 
     pub fn request_load(&mut self, path: ImageData) {
-        // return;
         if self.loaded_images.contains_key(&path) || self.currently_loading.contains(&path) {
             return;
         }
@@ -180,6 +174,14 @@ impl ImageStore {
             self.request_load(new_path.clone());
         }
         self.current_image_path = new_path;
+        self.preload_next_images(PRELOAD_NEXT_IMAGE_N);
+    }
+
+    pub fn select_image(&mut self, selected_image: ImageData) {
+        if !self.loaded_images.contains_key(&selected_image) {
+            self.request_load(selected_image.clone());
+        }
+        self.current_image_path = selected_image;
         self.preload_next_images(PRELOAD_NEXT_IMAGE_N);
     }
 
@@ -214,7 +216,6 @@ impl ImageStore {
                 .get(&self.current_image_path)
                 .unwrap();
         }
-        // panic!();
 
         let buf = load_thumbnail(&self.current_image_path);
         self.loaded_images_thumbnails

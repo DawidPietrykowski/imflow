@@ -1,4 +1,4 @@
-use egui::{Color32, Context, Visuals};
+use egui::{vec2, Color32, Context, Rangef, Style, Visuals};
 use egui_wgpu::wgpu::{CommandEncoder, Device, Queue, StoreOp, TextureFormat, TextureView};
 use egui_wgpu::{Renderer, ScreenDescriptor, wgpu};
 use egui_winit::State;
@@ -25,6 +25,7 @@ impl EguiRenderer {
     ) -> EguiRenderer {
         let egui_context = Context::default();
         egui_context.options_mut(|o| o.line_scroll_speed = 200.0);
+        egui_context.style_mut(|s| s.scroll_animation.duration = Rangef::new(0.1, 5.0));
         egui_context.set_visuals_of(
             egui::Theme::Dark,
             Visuals {
