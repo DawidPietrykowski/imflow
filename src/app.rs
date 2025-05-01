@@ -403,10 +403,10 @@ impl App {
             let current_image_selected = state.selected_image == store.current_image_path;
             let current_quality_loaded =
                 state.loaded_thumbnail == store.get_current_image().is_none();
-            println!(
-                "check {} {}",
-                current_quality_loaded, current_image_selected
-            );
+            // println!(
+            //     "check {} {}",
+            //     current_quality_loaded, current_image_selected
+            // );
             if current_image_selected && current_quality_loaded {
                 return;
             }
@@ -704,7 +704,8 @@ impl App {
             egui::TopBottomPanel::bottom("Thumbnails")
                 .exact_height(120.0)
                 .show(state.egui_renderer.context(), |panel_ui| {
-                    egui::ScrollArea::horizontal().show(panel_ui, |ui| {
+                    egui::ScrollArea::horizontal().max_width(f32::INFINITY).show(panel_ui, |ui| {
+                        ui.set_max_width(f32::INFINITY);
                         ui.horizontal_centered(|horizontal| {
                             for image in filtered_images {
                                 let source = ImageSource::Bytes {
@@ -714,7 +715,7 @@ impl App {
 
                                 let image_widget = horizontal.add(
                                     egui::Image::new(source)
-                                        .fit_to_original_size(0.8)
+                                        .shrink_to_fit()
                                         .corner_radius(10)
                                         .sense(Sense::click()),
                                 );
@@ -852,7 +853,7 @@ impl ApplicationHandler for App {
                     self.pan_zoom(0.0, pointer.delta().x * 0.001, pointer.delta().y * -0.001);
                 }
                 if scroll.y != 0.0 {
-                    self.pan_zoom(scroll.y * 0.01, 0.0, 0.0);
+                    self.pan_zoom(scroll.y * 0.001, 0.0, 0.0);
                 }
 
                 if updated_image {
@@ -910,6 +911,7 @@ impl ImageLoader for ImflowEguiLoader {
             };
             let mut image = ColorImage::new([imbuf.width, imbuf.height], Color32::BLACK);
             let image_buffer = image.as_raw_mut();
+            println!("w: {} h: {} len: {}", imbuf.width, imbuf.height, imbuf.rgba_buffer.len());
             for (i, &value) in imbuf.rgba_buffer.iter().enumerate() {
                 let bytes = value.to_le_bytes();
                 let start = i * 4;

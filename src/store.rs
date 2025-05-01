@@ -1,6 +1,8 @@
 use crate::image::{ImageData, ImageFormat, load_thumbnail};
 use crate::image::{ImflowImageBuffer, load_available_images, load_image};
 use crossbeam_channel::{Receiver, Sender, unbounded};
+use egui_wgpu::wgpu::hal::InstanceError;
+use exiftool::ExifTool;
 use rayon::prelude::*;
 use rexiv2::Metadata;
 use std::collections::HashMap;
@@ -101,15 +103,12 @@ impl ImageStore {
     }
 
     pub fn set_rating(&mut self, rating: i32) {
-        let meta = Metadata::new_from_path(self.current_image_path.path.clone());
-        match meta {
-            Ok(meta) => {
-                meta.set_tag_numeric("Xmp.xmp.Rating", rating).unwrap();
-                meta.save_to_file(self.current_image_path.path.clone())
-                    .unwrap();
-            }
-            Err(e) => panic!("{:?}", e),
-        }
+        let path = self.current_image_path.path.clone();
+        // println!("Writing {} to {:?}", rating, path);
+        let mut exiftool = ExifTool::new().unwrap();
+        exiftool.write_tag(path.as_path(), "Rating", rating, &["-overwrite_original"]).unwrap();
+        self.current_image_path.rating = rating;
+        self.available_images[self.current_image_id].rating = rating;
         if let Some(full) = self.loaded_images.get_mut(&self.current_image_path.clone()) {
             full.rating = rating;
         }
@@ -123,14 +122,6 @@ impl ImageStore {
 
     pub fn get_current_rating(&self) -> i32 {
         self.current_image_path.rating
-        // let imbuf = if let Some(full) = self.get_current_image() {
-        //     // println!("full");
-        //     full
-        // } else {
-        //     // TODO: this assumes loaded thumbnail
-
-        // };
-        // imbuf.rating
     }
 
     pub fn preload_next_images(&mut self, n: usize) {

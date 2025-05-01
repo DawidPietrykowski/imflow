@@ -7,6 +7,7 @@ mod egui_tools;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() {
+    rexiv2::initialize().expect("Unable to initialize rexiv2");
     let args = Args::parse();
     let path = args.path.unwrap_or("./test_images".into());
     #[cfg(not(target_arch = "wasm32"))]

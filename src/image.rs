@@ -427,9 +427,25 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
         handle.thumbnail_ids(&mut thumbnail_ids);
         let handle = &handle.thumbnail(thumbnail_ids[0]).unwrap();
 
+        let width = handle.width();
+        let height = handle.height();
+        let new_width: u32;
+        let new_height: u32;
+        const VAR_NAME: f32 = 640 as f32;
+        if width > height {
+            let scale = VAR_NAME / width as f32;
+            new_width = VAR_NAME as u32;
+            new_height = (height as f32 * scale) as u32;
+        } else {
+            let scale = VAR_NAME / height as f32;
+            new_height = VAR_NAME as u32;
+            new_width = (width as f32 * scale) as u32;
+        }
+        println!("new: {} {}", new_width, new_height);
+
         lib_heif
             .decode(handle, libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba), None)
-            .unwrap()
+            .unwrap().scale(new_width, new_height, None).unwrap()
     } else {
         let binding = ctx.top_level_image_handles();
         let handle = binding.get(0).unwrap();
@@ -444,8 +460,6 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
         Some(libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba)),
     );
 
-    let width = image.width() as usize;
-    let height = image.height() as usize;
 
     // Scale the image
     // if resize {
@@ -469,6 +483,10 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     assert_eq!(interleaved_plane.storage_bits_per_pixel, 32);
 
     let rgba_buffer = interleaved_plane.data;
+    println!("stride: {}", interleaved_plane.stride);
+    
+    let width = interleaved_plane.width as usize;
+    let height = interleaved_plane.height as usize;
     let u32_slice = slice_u8_to_u32(rgba_buffer);
 
     ImflowImageBuffer {
