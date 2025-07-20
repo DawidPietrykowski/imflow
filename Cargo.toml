@@ -26,6 +26,7 @@ zerocopy = "0.8.24"
 crossbeam-channel = "0.5.15"
 rayon = "1.10.0"
 exiftool = "0.2.3"
+rustc-hash = "2.1.1"
 
 [profile.release]
 opt-level = 3

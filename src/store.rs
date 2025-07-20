@@ -1,17 +1,17 @@
 use crate::image::{ImageData, ImageFormat, load_thumbnail};
 use crate::image::{ImflowImageBuffer, load_available_images, load_image};
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use egui_wgpu::wgpu::hal::InstanceError;
 use exiftool::ExifTool;
 use rayon::prelude::*;
-use rexiv2::Metadata;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
+use std::collections::{HashMap, VecDeque};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Instant;
 use threadpool::ThreadPool;
 
-const PRELOAD_NEXT_IMAGE_N: usize = 0;
+const PRELOAD_NEXT_IMAGE_N: usize = 15;
+const MAX_LOADED_IMAGES: usize = 450;
 
 pub struct FileFilters {
     pub rating: [bool; 6],
@@ -35,8 +35,8 @@ impl Default for FileFilters {
 
 pub struct ImageStore {
     pub current_image_id: usize,
-    pub(crate) loaded_images: HashMap<ImageData, ImflowImageBuffer>,
-    pub(crate) loaded_images_thumbnails: HashMap<ImageData, ImflowImageBuffer>,
+    pub(crate) loaded_images: FxHashMap<ImageData, ImflowImageBuffer>,
+    pub(crate) loaded_images_thumbnails: FxHashMap<ImageData, ImflowImageBuffer>,
     pub available_images: Vec<ImageData>,
     pub current_image_path: ImageData,
     pub image_changed: bool,
@@ -44,12 +44,12 @@ pub struct ImageStore {
     pub(crate) loader_rx: Receiver<(ImageData, ImflowImageBuffer)>,
     pub(crate) loader_tx: Sender<(ImageData, ImflowImageBuffer)>,
     pub(crate) currently_loading: HashSet<ImageData>,
+    pub load_times: VecDeque<ImageData>,
 }
 
 impl ImageStore {
     pub fn new(path: PathBuf) -> Self {
         let current_image_id: usize = 0;
-        let mut loaded_images: HashMap<ImageData, ImflowImageBuffer> = HashMap::new();
         let available_images = load_available_images(path);
         let new_path = available_images[0].clone();
 
@@ -75,7 +75,17 @@ impl ImageStore {
                 s.send((path.clone(), buf)).unwrap();
                 // }
             });
-        let loaded_thumbnails: HashMap<_, _> = receiver.iter().collect();
+
+        let mut loaded_images: FxHashMap<ImageData, ImflowImageBuffer> = FxHashMap::default();
+        loaded_images.reserve(available_images.len());
+
+        let mut loaded_thumbnails: FxHashMap<_, _> = FxHashMap::default();
+        loaded_thumbnails.reserve(available_images.len());
+        loaded_thumbnails.extend(receiver.iter());
+
+        let mut load_times: VecDeque<_> = VecDeque::default();
+        load_times.reserve(available_images.len());
+
         let total_time = total_start.elapsed();
         println!(
             "all thumbnails load time: {:?} for {}",
@@ -97,6 +107,7 @@ impl ImageStore {
             currently_loading,
             loaded_images_thumbnails: loaded_thumbnails,
             image_changed: true,
+            load_times,
         };
 
         state.preload_next_images(PRELOAD_NEXT_IMAGE_N);
@@ -108,7 +119,9 @@ impl ImageStore {
         let path = self.current_image_path.path.clone();
         // println!("Writing {} to {:?}", rating, path);
         let mut exiftool = ExifTool::new().unwrap();
-        exiftool.write_tag(path.as_path(), "Rating", rating, &["-overwrite_original"]).unwrap();
+        exiftool
+            .write_tag(path.as_path(), "Rating", rating, &["-overwrite_original"])
+            .unwrap();
         self.current_image_path.rating = rating;
         self.available_images[self.current_image_id].rating = rating;
         if let Some(full) = self.loaded_images.get_mut(&self.current_image_path.clone()) {
@@ -155,10 +168,15 @@ impl ImageStore {
         while let Ok((path, image)) = self.loader_rx.try_recv() {
             self.loaded_images.insert(path.clone(), image);
             self.currently_loading.remove(&path);
+            self.load_times.push_front(path);
+
+            if self.loaded_images.len() > MAX_LOADED_IMAGES {
+                self.evict_images(15);
+            }
         }
     }
 
-    pub fn next_image(&mut self, change: i32) {
+    pub fn next_image(&mut self, change: i32, filter: bool) {
         self.current_image_id = (self.current_image_id as i32 + change)
             .clamp(0, self.available_images.len() as i32 - 1)
             as usize;
@@ -176,7 +194,11 @@ impl ImageStore {
         if !self.loaded_images.contains_key(&selected_image) {
             self.request_load(selected_image.clone());
         }
-        let id = self.available_images.iter().position(|i| *i == selected_image).unwrap();
+        let id = self
+            .available_images
+            .iter()
+            .position(|i| *i == selected_image)
+            .unwrap();
         self.current_image_path = selected_image;
         self.current_image_id = id;
         self.preload_next_images(PRELOAD_NEXT_IMAGE_N);
@@ -240,4 +262,14 @@ impl ImageStore {
             .map(|f| f.clone())
             .collect::<Vec<ImageData>>()
     }
+
+    fn evict_images(&mut self, count: usize) {
+        for _ in 0..count {
+            if let Some(loaded_image) = self.load_times.pop_back() {
+                println!("Cache eviction: {:?}", loaded_image.path);
+                let _ = self.loaded_images.remove(&loaded_image);
+            }
+        }
+    }
 }
+

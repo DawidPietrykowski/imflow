@@ -30,8 +30,6 @@ use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::thread::sleep;
-use std::time::Duration;
 use std::time::Instant;
 
 #[derive(Clone, Eq, Hash, PartialEq, PartialOrd)]
@@ -486,7 +484,7 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     assert_eq!(interleaved_plane.storage_bits_per_pixel, 32);
 
     let rgba_buffer = interleaved_plane.data;
-    println!("stride: {}", interleaved_plane.stride);
+    // println!("stride: {}", interleaved_plane.stride);
     
     let width = interleaved_plane.width as usize;
     let height = interleaved_plane.height as usize;

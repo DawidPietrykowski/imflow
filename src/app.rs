@@ -1,14 +1,13 @@
 use crate::egui_tools::EguiRenderer;
 use egui::load::{ImageLoadResult, ImageLoader};
 use egui::{
-    Align, Align2, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Sense,
+    Align, Color32, ColorImage, Event, ImageSource, Key, PointerButton, Sense,
 };
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::metadata::Orientation;
-use imflow::image::{ImageData, ImageFormat, swap_wh};
+use imflow::image::{ImageData, swap_wh};
 use imflow::store::{FileFilters, ImageStore};
-use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::exit;
@@ -44,7 +43,7 @@ pub(crate) struct TransformData {
 #[rustfmt::skip]
 fn create_transform_matrix(data: &TransformData, scale_x: f32, scale_y: f32) -> [f32; 16] {
     const ZOOM_MULTIPLIER: f32 = 3.0;
-    let zoom = data.zoom.powf(ZOOM_MULTIPLIER);
+    let zoom = (data.zoom - 0.075).powf(ZOOM_MULTIPLIER);
 
     [
         zoom * scale_x, 0.0,            0.0, 0.0,
@@ -656,30 +655,31 @@ impl App {
             render_pass.draw_indexed(0..6, 0, 0..1);
         }
 
-        let mut rating_filter = [false; 6];
 
         // let mut file_filters;
         let rating;
         let path;
-        let current_id;
-        let image_count;
+        // let current_id;
+        // let image_count;
         let filename;
         let window;
         let filtered_images;
         let current_image;
         let changed_image;
+        let rating_filter;
         let mut selected_image = None;
         {
             let store = state.store.read().unwrap();
             rating = store.get_current_rating();
             path = store.current_image_path.clone();
-            current_id = store.current_image_id;
-            image_count = store.available_images.len();
+            // current_id = store.current_image_id;
+            // image_count = store.available_images.len();
             current_image = store.current_image_path.clone();
             filtered_images = store.get_filtered_images(&state.filters);
             changed_image = store.image_changed.clone();
             filename = path.path.file_name().unwrap();
             window = self.window.as_ref().unwrap();
+            rating_filter = state.filters.rating;
         }
         {
             state.egui_renderer.begin_frame(window);
@@ -710,6 +710,9 @@ impl App {
                         ui.set_max_width(f32::INFINITY);
                         ui.horizontal_centered(|horizontal| {
                             for image in filtered_images {
+                                if image.rating >= 0 && image.rating < 6 && !rating_filter[image.rating as usize] {
+                                    continue;
+                                }
                                 let source = ImageSource::Bytes {
                                     uri: std::borrow::Cow::Owned(image.get_hash_str()),
                                     bytes: egui::load::Bytes::Static(&[]),
@@ -819,11 +822,11 @@ impl ApplicationHandler for App {
                             }
                             match *key {
                                 Key::ArrowLeft => {
-                                    store.next_image(-1);
+                                    store.next_image(-1, true);
                                     updated_image = true;
                                 }
                                 Key::ArrowRight => {
-                                    store.next_image(1);
+                                    store.next_image(1, true);
                                     updated_image = true;
                                 }
                                 Key::ArrowUp => {

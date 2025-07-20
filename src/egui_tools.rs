@@ -1,4 +1,4 @@
-use egui::{vec2, Color32, Context, Rangef, Style, Visuals};
+use egui::{Color32, Context, Rangef, Visuals};
 use egui_wgpu::wgpu::{CommandEncoder, Device, Queue, StoreOp, TextureFormat, TextureView};
 use egui_wgpu::{Renderer, ScreenDescriptor, wgpu};
 use egui_winit::State;
