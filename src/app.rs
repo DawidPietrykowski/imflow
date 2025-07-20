@@ -752,7 +752,7 @@ impl App {
             if let Ok(mut store) = state.store.write() {
                 store.image_changed = false;
                 if let Some(selected_image) = selected_image {
-                    store.select_image(selected_image);
+                    store.select_image(selected_image, Some(&state.filters));
                 }
             }
 
@@ -825,15 +825,15 @@ impl ApplicationHandler for App {
                             }
                             match *key {
                                 Key::ArrowLeft => {
-                                    store.next_image(-1, Some(filters.clone()));
+                                    store.next_image(-1, Some(&filters));
                                     updated_image = true;
                                 }
                                 Key::ArrowRight => {
-                                    store.next_image(1, Some(filters.clone()));
+                                    store.next_image(1, Some(&filters));
                                     updated_image = true;
                                 }
                                 Key::Backslash => {
-                                    store.last_image();
+                                    store.last_image(Some(&filters));
                                     updated_image = true;
                                 }
                                 Key::ArrowUp => {

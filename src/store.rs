@@ -113,7 +113,7 @@ impl ImageStore {
             previous_id: None,
         };
 
-        state.preload_next_images(PRELOAD_NEXT_IMAGE_N);
+        state.preload_next_images(PRELOAD_NEXT_IMAGE_N, None);
 
         state
     }
@@ -142,15 +142,13 @@ impl ImageStore {
         self.current_image_path.rating
     }
 
-    pub fn preload_next_images(&mut self, n: usize) {
-        for image in self
-            .available_images
-            .clone()
-            .iter()
-            .skip(self.current_image_id)
-            .take(n)
-        {
-            self.request_load(image.clone());
+    pub fn preload_next_images(&mut self, n: usize, filter: Option<&FileFilters>) {
+        for i in 1..=n {
+            if let Some(next_id) = self.get_next_image_id(i as i32, filter) {
+                self.request_load(self.available_images[next_id].clone());
+            } else {
+                break;
+            }
         }
     }
 
@@ -179,14 +177,13 @@ impl ImageStore {
         }
     }
 
-    pub fn next_image(&mut self, change: i32, filter: Option<FileFilters>) {
+    fn get_next_image_id(&mut self, change: i32, filter: Option<&FileFilters>) -> Option<usize> {
         let mut next_id = self.current_image_id as i32;
         loop {
             next_id += change;
             if next_id < 0 || next_id > self.available_images.len() as i32 - 1 {
                 // restore to original id
-                next_id = self.current_image_id as i32;
-                break;
+                return None;
             }
             if let Some(filter) = &filter {
                 // println("matching on filter");
@@ -198,20 +195,26 @@ impl ImageStore {
             }
         }
 
-        self.set_image(next_id as usize);
+        Some(next_id as usize)
     }
 
-    pub fn select_image(&mut self, selected_image: ImageData) {
+    pub fn next_image(&mut self, change: i32, filter: Option<&FileFilters>) {
+        if let Some(next_id) = self.get_next_image_id(change, filter) {
+            self.set_image(next_id, filter);
+        }
+    }
+
+    pub fn select_image(&mut self, selected_image: ImageData, filter: Option<&FileFilters>) {
         let id = self
             .available_images
             .iter()
             .position(|i| *i == selected_image)
             .unwrap();
 
-        self.set_image(id);
+        self.set_image(id, filter);
     }
 
-    fn set_image(&mut self, next_id: usize) {
+    fn set_image(&mut self, next_id: usize, filter: Option<&FileFilters>) {
         self.previous_id = Some(self.current_image_id);
 
         let new_image = self.available_images[next_id as usize].clone();
@@ -220,7 +223,7 @@ impl ImageStore {
         }
         self.current_image_path = new_image;
         self.current_image_id = next_id as usize;
-        self.preload_next_images(PRELOAD_NEXT_IMAGE_N);
+        self.preload_next_images(PRELOAD_NEXT_IMAGE_N, filter);
         self.image_changed = true;
     }
 
@@ -303,9 +306,9 @@ impl ImageStore {
         }
     }
 
-    pub fn last_image(&mut self) {
+    pub fn last_image(&mut self, filter: Option<&FileFilters>) {
         if let Some(previous_id) = self.previous_id {
-            self.set_image(previous_id);
+            self.set_image(previous_id, filter);
         }
     }
 }
