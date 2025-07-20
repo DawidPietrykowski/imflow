@@ -46,6 +46,7 @@ pub struct ImageStore {
     pub(crate) loader_tx: Sender<(ImageData, ImflowImageBuffer)>,
     pub(crate) currently_loading: HashSet<ImageData>,
     pub load_times: VecDeque<ImageData>,
+    previous_id: Option<usize>,
 }
 
 impl ImageStore {
@@ -109,6 +110,7 @@ impl ImageStore {
             loaded_images_thumbnails: loaded_thumbnails,
             image_changed: true,
             load_times,
+            previous_id: None,
         };
 
         state.preload_next_images(PRELOAD_NEXT_IMAGE_N);
@@ -182,40 +184,42 @@ impl ImageStore {
         loop {
             next_id += change;
             if next_id < 0 || next_id > self.available_images.len() as i32 - 1 {
+                // restore to original id
+                next_id = self.current_image_id as i32;
                 break;
             }
             if let Some(filter) = &filter {
                 // println("matching on filter");
                 if self.filter_image(&self.available_images[next_id as usize], filter) {
-                    self.current_image_id = next_id as usize;
                     break;
                 }
             } else {
-                self.current_image_id = next_id as usize;
                 break;
             }
         }
 
-        let new_path = self.available_images[self.current_image_id].clone();
-        if !self.loaded_images.contains_key(&new_path) {
-            self.request_load(new_path.clone());
-        }
-        self.current_image_path = new_path;
-        self.preload_next_images(PRELOAD_NEXT_IMAGE_N);
-        self.image_changed = true;
+        self.set_image(next_id as usize);
     }
 
     pub fn select_image(&mut self, selected_image: ImageData) {
-        if !self.loaded_images.contains_key(&selected_image) {
-            self.request_load(selected_image.clone());
-        }
         let id = self
             .available_images
             .iter()
             .position(|i| *i == selected_image)
             .unwrap();
-        self.current_image_path = selected_image;
-        self.current_image_id = id;
+
+        self.set_image(id);
+    }
+
+    fn set_image(&mut self, next_id: usize) {
+        self.previous_id = Some(self.current_image_id);
+
+        let new_image = self.available_images[next_id as usize].clone();
+        if !self.loaded_images.contains_key(&new_image) {
+            self.request_load(new_image.clone());
+        }
+        self.current_image_path = new_image;
+        self.current_image_id = next_id as usize;
         self.preload_next_images(PRELOAD_NEXT_IMAGE_N);
         self.image_changed = true;
     }
@@ -296,6 +300,12 @@ impl ImageStore {
                 println!("Cache eviction: {:?}", loaded_image.path);
                 let _ = self.loaded_images.remove(&loaded_image);
             }
+        }
+    }
+
+    pub fn last_image(&mut self) {
+        if let Some(previous_id) = self.previous_id {
+            self.set_image(previous_id);
         }
     }
 }

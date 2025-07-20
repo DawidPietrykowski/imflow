@@ -832,6 +832,10 @@ impl ApplicationHandler for App {
                                     store.next_image(1, Some(filters.clone()));
                                     updated_image = true;
                                 }
+                                Key::Backslash => {
+                                    store.last_image();
+                                    updated_image = true;
+                                }
                                 Key::ArrowUp => {
                                     let rating = store.get_current_rating();
                                     store.set_rating(rating + 1);
