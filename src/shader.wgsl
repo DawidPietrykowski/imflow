@@ -50,7 +50,7 @@ fn fs_main(@location(0) in: vec2<f32>) -> @location(0) vec4<f32> {
     let max_uv = scale - half_texel;
     pixel = clamp(pixel, min_uv, max_uv);
 
-    if transforms.orientation == 3 {
+    if transforms.orientation == 3 || transforms.orientation == 1 {
         pixel = reverse(pixel);
     }
     return textureSample(texture, texture_sampler, pixel);

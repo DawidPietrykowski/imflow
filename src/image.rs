@@ -1,3 +1,4 @@
+use exiftool::g2::ExifData;
 use image::DynamicImage;
 use image::ImageBuffer;
 use image::Rgba;
@@ -7,8 +8,10 @@ use itertools::Itertools;
 use jpegxl_rs::Endianness;
 use jpegxl_rs::decode::PixelFormat;
 use jpegxl_rs::decoder_builder;
+use libheif_rs::ItemId;
 use libheif_rs::{HeifContext, LibHeif, RgbChroma};
 use rexiv2::Metadata;
+use rexiv2::is_exif_tag;
 use sha2::Digest;
 use sha2::Sha256;
 use sha2::digest::consts::U32;
@@ -117,8 +120,8 @@ pub fn swap_wh<T>(width: T, height: T, orientation: Orientation) -> (T, T) {
     if [
         Orientation::Rotate90,
         Orientation::Rotate270,
-        Orientation::Rotate90FlipH,
-        Orientation::Rotate270FlipH,
+        // Orientation::Rotate90FlipH,
+        // Orientation::Rotate270FlipH,
     ]
     .contains(&orientation)
     {
@@ -131,7 +134,13 @@ fn get_format(path: &PathBuf) -> Option<ImageFormat> {
     if !path.is_file() {
         return None;
     }
-    if path.file_name().unwrap().to_str().unwrap().starts_with(&['.']) {
+    if path
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with(&['.'])
+    {
         return None;
     }
     let os_str = path.extension().unwrap().to_ascii_lowercase();
@@ -212,6 +221,7 @@ pub fn load_image(image: &ImageData) -> ImflowImageBuffer {
             let orientation = image.orientation;
             let rgba_buffer = vec_u8_to_u32(buffer);
             println!("Total loading time: {:?}", total_start.elapsed());
+            println!("Orientation: {:?}", image.orientation);
             ImflowImageBuffer {
                 width,
                 height,
@@ -419,6 +429,7 @@ pub fn load_thumbnail_full(path: &ImageData) -> ImflowImageBuffer {
 pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     let lib_heif = LibHeif::new();
     let ctx = HeifContext::read_from_file(path.path.to_str().unwrap()).unwrap();
+    let mut orientation = Orientation::NoTransforms;
 
     let image = if resize {
         let binding = ctx.top_level_image_handles();
@@ -442,14 +453,25 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
             new_height = VAR_NAME as u32;
             new_width = (width as f32 * scale) as u32;
         }
-        println!("new: {} {}", new_width, new_height);
 
         lib_heif
             .decode(handle, libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba), None)
-            .unwrap().scale(new_width, new_height, None).unwrap()
+            .unwrap()
+            .scale(new_width, new_height, None)
+            .unwrap()
     } else {
         let binding = ctx.top_level_image_handles();
         let handle = binding.get(0).unwrap();
+
+        // Get Exif
+        let mut meta_ids: Vec<ItemId> = vec![0; 1];
+        let count = handle.metadata_block_ids(&mut meta_ids, b"Exif");
+        assert_eq!(count, 1);
+        if let Ok(exif) = handle.metadata(meta_ids[0]) {
+            if let Ok(metadata) = rexiv2::Metadata::new_from_buffer(&exif) {
+                orientation = Orientation::from_exif(metadata.get_orientation() as u8).unwrap();
+            }
+        }
 
         lib_heif
             .decode(handle, libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba), None)
@@ -460,7 +482,6 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
         image.color_space(),
         Some(libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba)),
     );
-
 
     // Scale the image
     // if resize {
@@ -484,8 +505,7 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     assert_eq!(interleaved_plane.storage_bits_per_pixel, 32);
 
     let rgba_buffer = interleaved_plane.data;
-    // println!("stride: {}", interleaved_plane.stride);
-    
+
     let width = interleaved_plane.width as usize;
     let height = interleaved_plane.height as usize;
     let u32_slice = slice_u8_to_u32(rgba_buffer);
@@ -495,8 +515,7 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
         height,
         rgba_buffer: u32_slice.to_vec(),
         rating,
-        // TODO: verify
-        orientation: Orientation::NoTransforms,
+        orientation,
     }
 }
 
