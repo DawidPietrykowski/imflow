@@ -39,6 +39,7 @@ pub struct ImageStore {
     pub(crate) loaded_images_thumbnails: HashMap<ImageData, ImflowImageBuffer>,
     pub available_images: Vec<ImageData>,
     pub current_image_path: ImageData,
+    pub image_changed: bool,
     pub(crate) pool: ThreadPool,
     pub(crate) loader_rx: Receiver<(ImageData, ImflowImageBuffer)>,
     pub(crate) loader_tx: Sender<(ImageData, ImflowImageBuffer)>,
@@ -95,6 +96,7 @@ impl ImageStore {
             loader_tx,
             currently_loading,
             loaded_images_thumbnails: loaded_thumbnails,
+            image_changed: true,
         };
 
         state.preload_next_images(PRELOAD_NEXT_IMAGE_N);
@@ -167,14 +169,18 @@ impl ImageStore {
         }
         self.current_image_path = new_path;
         self.preload_next_images(PRELOAD_NEXT_IMAGE_N);
+        self.image_changed = true;
     }
 
     pub fn select_image(&mut self, selected_image: ImageData) {
         if !self.loaded_images.contains_key(&selected_image) {
             self.request_load(selected_image.clone());
         }
+        let id = self.available_images.iter().position(|i| *i == selected_image).unwrap();
         self.current_image_path = selected_image;
+        self.current_image_id = id;
         self.preload_next_images(PRELOAD_NEXT_IMAGE_N);
+        self.image_changed = true;
     }
 
     pub fn get_current_image(&self) -> Option<&ImflowImageBuffer> {

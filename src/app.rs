@@ -667,6 +667,7 @@ impl App {
         let window;
         let filtered_images;
         let current_image;
+        let changed_image;
         let mut selected_image = None;
         {
             let store = state.store.read().unwrap();
@@ -676,6 +677,7 @@ impl App {
             image_count = store.available_images.len();
             current_image = store.current_image_path.clone();
             filtered_images = store.get_filtered_images(&state.filters);
+            changed_image = store.image_changed.clone();
             filename = path.path.file_name().unwrap();
             window = self.window.as_ref().unwrap();
         }
@@ -719,7 +721,7 @@ impl App {
                                         .corner_radius(10)
                                         .sense(Sense::click()),
                                 );
-                                if current_image == image {
+                                if changed_image && current_image == image {
                                     image_widget.scroll_to_me(Some(Align::Center));
                                 }
                                 if image_widget.clicked() {
@@ -743,8 +745,11 @@ impl App {
                 }
             });
 
-            if let Some(selected_image) = selected_image {
-                state.store.write().unwrap().select_image(selected_image);
+            if let Ok(mut store) = state.store.write() {
+                store.image_changed = false;
+                if let Some(selected_image) = selected_image {
+                    store.select_image(selected_image);
+                }
             }
 
             state.egui_renderer.end_frame_and_draw(
