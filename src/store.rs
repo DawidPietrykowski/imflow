@@ -4,8 +4,8 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use exiftool::ExifTool;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
-use std::collections::{HashMap, VecDeque};
 use std::collections::HashSet;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::time::Instant;
 use threadpool::ThreadPool;
@@ -13,6 +13,7 @@ use threadpool::ThreadPool;
 const PRELOAD_NEXT_IMAGE_N: usize = 15;
 const MAX_LOADED_IMAGES: usize = 450;
 
+#[derive(Clone)]
 pub struct FileFilters {
     pub rating: [bool; 6],
     pub name: String,
@@ -176,10 +177,24 @@ impl ImageStore {
         }
     }
 
-    pub fn next_image(&mut self, change: i32, filter: bool) {
-        self.current_image_id = (self.current_image_id as i32 + change)
-            .clamp(0, self.available_images.len() as i32 - 1)
-            as usize;
+    pub fn next_image(&mut self, change: i32, filter: Option<FileFilters>) {
+        let mut next_id = self.current_image_id as i32;
+        loop {
+            next_id += change;
+            if next_id < 0 || next_id > self.available_images.len() as i32 - 1 {
+                break;
+            }
+            if let Some(filter) = &filter {
+                // println("matching on filter");
+                if self.filter_image(&self.available_images[next_id as usize], filter) {
+                    self.current_image_id = next_id as usize;
+                    break;
+                }
+            } else {
+                self.current_image_id = next_id as usize;
+                break;
+            }
+        }
 
         let new_path = self.available_images[self.current_image_id].clone();
         if !self.loaded_images.contains_key(&new_path) {
@@ -263,6 +278,18 @@ impl ImageStore {
             .collect::<Vec<ImageData>>()
     }
 
+    fn filter_image(&self, image: &ImageData, filter: &FileFilters) -> bool {
+        filter.rating[image.rating.clamp(0, 5) as usize]
+            && filter.file_format[&image.format]
+            && image
+                .path
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains(&filter.name)
+    }
+
     fn evict_images(&mut self, count: usize) {
         for _ in 0..count {
             if let Some(loaded_image) = self.load_times.pop_back() {
@@ -272,4 +299,3 @@ impl ImageStore {
         }
     }
 }
-
