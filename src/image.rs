@@ -133,6 +133,9 @@ fn get_format(path: &PathBuf) -> Option<ImageFormat> {
     if !path.is_file() {
         return None;
     }
+    if path.file_name().unwrap().to_str().unwrap().starts_with(&['.']) {
+        return None;
+    }
     let os_str = path.extension().unwrap().to_ascii_lowercase();
     let extension = &os_str.to_str().unwrap();
     if ["heic", "heif"].contains(extension) {
