@@ -1,8 +1,6 @@
 use crate::egui_tools::EguiRenderer;
 use egui::load::{ImageLoadResult, ImageLoader};
-use egui::{
-    Align, Color32, ColorImage, Event, ImageSource, Key, PointerButton, Sense,
-};
+use egui::{Align, Color32, ColorImage, Event, ImageSource, Key, PointerButton, Sense};
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::metadata::Orientation;
@@ -395,8 +393,7 @@ impl App {
 
     pub fn update_texture(&mut self, force: bool) {
         let state = self.state.as_mut().unwrap();
-        if !force
-        {
+        if !force {
             let mut store = state.store.write().unwrap();
             store.check_loaded_images();
             let current_image_selected = state.selected_image == store.current_image_path;
@@ -655,7 +652,6 @@ impl App {
             render_pass.draw_indexed(0..6, 0, 0..1);
         }
 
-
         // let mut file_filters;
         let rating;
         let path;
@@ -706,34 +702,39 @@ impl App {
             egui::TopBottomPanel::bottom("Thumbnails")
                 .exact_height(120.0)
                 .show(state.egui_renderer.context(), |panel_ui| {
-                    egui::ScrollArea::horizontal().max_width(f32::INFINITY).show(panel_ui, |ui| {
-                        ui.set_max_width(f32::INFINITY);
-                        ui.horizontal_centered(|horizontal| {
-                            for image in filtered_images {
-                                if image.rating >= 0 && image.rating < 6 && !rating_filter[image.rating as usize] {
-                                    continue;
-                                }
-                                let source = ImageSource::Bytes {
-                                    uri: std::borrow::Cow::Owned(image.get_hash_str()),
-                                    bytes: egui::load::Bytes::Static(&[]),
-                                };
+                    egui::ScrollArea::horizontal()
+                        .max_width(f32::INFINITY)
+                        .show(panel_ui, |ui| {
+                            ui.set_max_width(f32::INFINITY);
+                            ui.horizontal_centered(|horizontal| {
+                                for image in filtered_images {
+                                    if image.rating >= 0
+                                        && image.rating < 6
+                                        && !rating_filter[image.rating as usize]
+                                    {
+                                        continue;
+                                    }
+                                    let source = ImageSource::Bytes {
+                                        uri: std::borrow::Cow::Owned(image.get_hash_str()),
+                                        bytes: egui::load::Bytes::Static(&[]),
+                                    };
 
-                                let image_widget = horizontal.add(
-                                    egui::Image::new(source)
-                                        .shrink_to_fit()
-                                        .corner_radius(10)
-                                        .sense(Sense::click()),
-                                );
-                                if changed_image && current_image == image {
-                                    image_widget.scroll_to_me(Some(Align::Center));
+                                    let image_widget = horizontal.add(
+                                        egui::Image::new(source)
+                                            .shrink_to_fit()
+                                            .corner_radius(10)
+                                            .sense(Sense::click()),
+                                    );
+                                    if changed_image && current_image == image {
+                                        image_widget.scroll_to_me(Some(Align::Center));
+                                    }
+                                    if image_widget.clicked() {
+                                        println!("{}", image.get_hash_str());
+                                        selected_image = Some(image);
+                                    }
                                 }
-                                if image_widget.clicked() {
-                                    println!("{}", image.get_hash_str());
-                                    selected_image = Some(image);
-                                }
-                            }
+                            });
                         });
-                    });
                 });
 
             egui::SidePanel::right("Filters").show(state.egui_renderer.context(), |ui| {
@@ -814,7 +815,9 @@ impl ApplicationHandler for App {
                 let mut updated_image = false;
                 let mut reset_transform = false;
                 {
-                    let mut store = self.state.as_mut().unwrap().store.write().unwrap();
+                    let state = self.state.as_mut().unwrap();
+                    let filters = state.filters.clone();
+                    let mut store = state.store.write().unwrap();
                     events.iter().for_each(|e| {
                         if let Event::Key { key, pressed, .. } = e {
                             if !*pressed {
@@ -822,11 +825,11 @@ impl ApplicationHandler for App {
                             }
                             match *key {
                                 Key::ArrowLeft => {
-                                    store.next_image(-1, true);
+                                    store.next_image(-1, Some(filters.clone()));
                                     updated_image = true;
                                 }
                                 Key::ArrowRight => {
-                                    store.next_image(1, true);
+                                    store.next_image(1, Some(filters.clone()));
                                     updated_image = true;
                                 }
                                 Key::ArrowUp => {
@@ -919,7 +922,12 @@ impl ImageLoader for ImflowEguiLoader {
             };
             let mut image = ColorImage::new([imbuf.width, imbuf.height], Color32::BLACK);
             let image_buffer = image.as_raw_mut();
-            println!("w: {} h: {} len: {}", imbuf.width, imbuf.height, imbuf.rgba_buffer.len());
+            println!(
+                "w: {} h: {} len: {}",
+                imbuf.width,
+                imbuf.height,
+                imbuf.rgba_buffer.len()
+            );
             for (i, &value) in imbuf.rgba_buffer.iter().enumerate() {
                 let bytes = value.to_le_bytes();
                 let start = i * 4;
