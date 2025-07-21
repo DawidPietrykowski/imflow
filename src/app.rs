@@ -5,7 +5,7 @@ use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::metadata::Orientation;
 use imflow::image::{ImageData, swap_wh};
-use imflow::store::{FileFilters, ImageStore};
+use imflow::store::{CROP_TAG, EDIT_TAG, FileFilters, ImageStore, TagAction};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::exit;
@@ -663,6 +663,7 @@ impl App {
         let current_image;
         let changed_image;
         let rating_filter;
+        let tags;
         let mut selected_image = None;
         {
             let store = state.store.read().unwrap();
@@ -676,6 +677,7 @@ impl App {
             filename = path.path.file_name().unwrap();
             window = self.window.as_ref().unwrap();
             rating_filter = state.filters.rating;
+            tags = path.tags;
         }
         {
             state.egui_renderer.begin_frame(window);
@@ -698,6 +700,27 @@ impl App {
                         );
                     });
                 });
+
+            if tags.contains(&EDIT_TAG.to_string()) {
+                egui::Window::new("EDIT")
+                    .collapsible(false)
+                    .resizable(false)
+                    .default_width(10.0)
+                    .title_bar(false)
+                    .show(state.egui_renderer.context(), |ui| {
+                        ui.label(egui::RichText::new("EDIT").monospace().size(32.0).strong());
+                    });
+            }
+            if tags.contains(&CROP_TAG.to_string()) {
+                egui::Window::new("CROP")
+                    .collapsible(false)
+                    .resizable(false)
+                    .default_width(10.0)
+                    .title_bar(false)
+                    .show(state.egui_renderer.context(), |ui| {
+                        ui.label(egui::RichText::new("CROP").monospace().size(32.0).strong());
+                    });
+            }
 
             egui::TopBottomPanel::bottom("Thumbnails")
                 .exact_height(120.0)
@@ -742,10 +765,20 @@ impl App {
                     ui.checkbox(&mut rating, format!("{} stars", i));
                 }
 
+                ui.separator();
+
                 ui.text_edit_singleline(&mut state.filters.name);
+
+                ui.separator();
 
                 for (format, mut value) in state.filters.file_format.iter_mut() {
                     ui.checkbox(&mut value, format!("{}", format));
+                }
+
+                ui.separator();
+
+                for (tag, mut value) in state.filters.tags.iter_mut() {
+                    ui.checkbox(&mut value, format!("{}", tag));
                 }
             });
 
@@ -843,6 +876,12 @@ impl ApplicationHandler for App {
                                 Key::ArrowDown => {
                                     let rating = store.get_current_rating();
                                     store.set_rating(rating - 1);
+                                }
+                                Key::E => {
+                                    store.set_tag(EDIT_TAG.to_string(), TagAction::Toggle);
+                                }
+                                Key::C => {
+                                    store.set_tag(CROP_TAG.to_string(), TagAction::Toggle);
                                 }
                                 Key::Backtick => store.set_rating(0),
                                 Key::Num0 => store.set_rating(0),

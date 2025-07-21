@@ -1,4 +1,3 @@
-use exiftool::g2::ExifData;
 use image::DynamicImage;
 use image::ImageBuffer;
 use image::Rgba;
@@ -11,7 +10,6 @@ use jpegxl_rs::decoder_builder;
 use libheif_rs::ItemId;
 use libheif_rs::{HeifContext, LibHeif, RgbChroma};
 use rexiv2::Metadata;
-use rexiv2::is_exif_tag;
 use sha2::Digest;
 use sha2::Sha256;
 use sha2::digest::consts::U32;
@@ -60,6 +58,7 @@ pub struct ImageData {
     pub orientation: Orientation,
     pub hash: GenericArray<u8, U32>,
     pub rating: i32,
+    pub tags: Vec<String>,
 }
 
 impl ImageData {
@@ -98,7 +97,6 @@ pub struct ImflowImageBuffer {
     pub width: usize,
     pub height: usize,
     pub rgba_buffer: Vec<u32>,
-    pub rating: i32,
     pub orientation: Orientation,
 }
 
@@ -168,8 +166,6 @@ pub fn load_image(image: &ImageData) -> ImflowImageBuffer {
             img
         }
         ImageFormat::Jxl => {
-            let rating = get_rating(image);
-
             let file = read(image.path.clone()).unwrap();
             use jpegxl_rs::ThreadsRunner;
             let runner = ThreadsRunner::default();
@@ -198,13 +194,10 @@ pub fn load_image(image: &ImageData) -> ImflowImageBuffer {
                 width,
                 height,
                 rgba_buffer,
-                rating,
                 orientation,
             }
         }
         ImageFormat::Jpg => {
-            let rating = get_rating(image);
-
             let mut buffer: Vec<u8>;
             let options = DecoderOptions::new_fast().jpeg_set_out_colorspace(ColorSpace::RGBA);
             let file = read(image.path.clone()).unwrap();
@@ -226,7 +219,6 @@ pub fn load_image(image: &ImageData) -> ImflowImageBuffer {
                 width,
                 height,
                 rgba_buffer,
-                rating,
                 orientation,
             }
         }
@@ -285,6 +277,9 @@ pub fn load_available_images(dir: PathBuf) -> Vec<ImageData> {
                     .unwrap_or(Orientation::NoTransforms);
                 let hash = get_file_hash(&path);
                 let rating = meta.get_tag_numeric("Xmp.xmp.Rating");
+                let tags = meta
+                    .get_tag_multiple_strings("Xmp.digiKam.TagsList")
+                    .unwrap_or_default();
                 Some(ImageData {
                     path,
                     format,
@@ -292,6 +287,7 @@ pub fn load_available_images(dir: PathBuf) -> Vec<ImageData> {
                     orientation,
                     hash,
                     rating,
+                    tags,
                 })
             } else {
                 None
@@ -350,7 +346,6 @@ pub fn load_thumbnail(path: &ImageData) -> ImflowImageBuffer {
             width,
             height,
             rgba_buffer: buffer_u32,
-            rating: 0,
             orientation,
         };
     }
@@ -386,13 +381,11 @@ pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
         let width: usize = image.width() as usize;
         let height: usize = image.height() as usize;
         let rgba_buffer = image_to_rgba_buffer(image);
-        let rating = get_rating(path.into());
 
         Some(ImflowImageBuffer {
             width,
             height,
             rgba_buffer,
-            rating,
             orientation,
         })
     } else {
@@ -414,14 +407,12 @@ pub fn load_thumbnail_full(path: &ImageData) -> ImflowImageBuffer {
     let start = std::time::Instant::now();
     let buffer = image_to_rgba_buffer(image);
     println!("Elapsed: {:?}", start.elapsed());
-    let rating = get_rating(path.into());
     let orientation = path.orientation;
 
     ImflowImageBuffer {
         width,
         height,
         rgba_buffer: buffer,
-        rating,
         orientation,
     }
 }
@@ -495,8 +486,6 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     //     height = image.height() as usize;
     // }
 
-    let rating = get_rating(path);
-
     // Get "pixels"
     let planes = image.planes();
     let interleaved_plane = planes.interleaved.unwrap();
@@ -514,7 +503,6 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
         width,
         height,
         rgba_buffer: u32_slice.to_vec(),
-        rating,
         orientation,
     }
 }

@@ -13,11 +13,22 @@ use threadpool::ThreadPool;
 const PRELOAD_NEXT_IMAGE_N: usize = 15;
 const MAX_LOADED_IMAGES: usize = 450;
 
+pub const EDIT_TAG: &str = "edit";
+pub const CROP_TAG: &str = "crop";
+
+#[derive(PartialEq)]
+pub enum TagAction {
+    Add,
+    Remove,
+    Toggle,
+}
+
 #[derive(Clone)]
 pub struct FileFilters {
     pub rating: [bool; 6],
     pub name: String,
     pub file_format: HashMap<ImageFormat, bool>,
+    pub tags: HashMap<String, bool>,
 }
 
 impl Default for FileFilters {
@@ -26,11 +37,35 @@ impl Default for FileFilters {
         formats.insert(ImageFormat::Jpg, true);
         formats.insert(ImageFormat::Jxl, true);
         formats.insert(ImageFormat::Heif, true);
+        let mut tags = HashMap::new();
+        tags.insert(EDIT_TAG.to_string(), false);
+        tags.insert(CROP_TAG.to_string(), false);
         FileFilters {
             rating: [true; 6],
             name: "".to_string(),
             file_format: formats,
+            tags,
         }
+    }
+}
+
+impl FileFilters {
+    fn filter_image(&self, image: &ImageData) -> bool {
+        self.rating[image.rating.clamp(0, 5) as usize]
+            && self.file_format[&image.format]
+            && image
+                .path
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains(&self.name)
+            && (!self.tags.iter().any(|f| *f.1)
+                || self
+                    .tags
+                    .iter()
+                    .filter(|f| *f.1)
+                    .all(|tag| image.tags.contains(tag.0)))
     }
 }
 
@@ -119,22 +154,65 @@ impl ImageStore {
     }
 
     pub fn set_rating(&mut self, rating: i32) {
-        let path = self.current_image_path.path.clone();
+        let current_image = &mut self.available_images[self.current_image_id];
+        let path = current_image.path.clone();
+
         // println!("Writing {} to {:?}", rating, path);
         let mut exiftool = ExifTool::new().unwrap();
         exiftool
             .write_tag(path.as_path(), "Rating", rating, &["-overwrite_original"])
             .unwrap();
         self.current_image_path.rating = rating;
-        self.available_images[self.current_image_id].rating = rating;
-        if let Some(full) = self.loaded_images.get_mut(&self.current_image_path.clone()) {
-            full.rating = rating;
+        current_image.rating = rating;
+    }
+
+    pub fn set_tag(&mut self, tag: String, action: TagAction) {
+        let current_image = &mut self.available_images[self.current_image_id];
+        let contains = current_image.tags.contains(&tag);
+        let add = match action {
+            TagAction::Add => true,
+            TagAction::Remove => false,
+            TagAction::Toggle => !contains,
+        };
+
+        if add && contains {
+            return;
+        } else if !add && !contains {
+            return;
         }
-        if let Some(thumbnail) = self
-            .loaded_images_thumbnails
-            .get_mut(&self.current_image_path.clone())
-        {
-            thumbnail.rating = rating;
+
+        let path = current_image.path.clone();
+        let mut exiftool = ExifTool::new().unwrap();
+        let action_char = match add {
+            true => '+',
+            false => '-',
+        };
+        let tag_arg = format!("-{}{}={}", "XMP:TagsList", action_char, tag);
+
+        let path_str = path.to_string_lossy();
+        let mut args = vec![tag_arg.as_str()];
+        args.extend_from_slice(&["-overwrite_original"]);
+        args.push(path_str.as_ref());
+
+        exiftool.execute_raw(&args).unwrap();
+
+        match add {
+            true => {
+                current_image.tags.push(tag.clone());
+                self.current_image_path.tags.push(tag.clone());
+            }
+            false => {
+                let pos = current_image.tags.iter().position(|t| *t == tag).unwrap();
+                current_image.tags.remove(pos);
+
+                let pos = self
+                    .current_image_path
+                    .tags
+                    .iter()
+                    .position(|t| *t == tag)
+                    .unwrap();
+                self.current_image_path.tags.remove(pos);
+            }
         }
     }
 
@@ -187,7 +265,7 @@ impl ImageStore {
             }
             if let Some(filter) = &filter {
                 // println("matching on filter");
-                if self.filter_image(&self.available_images[next_id as usize], filter) {
+                if filter.filter_image(&self.available_images[next_id as usize]) {
                     break;
                 }
             } else {
@@ -271,30 +349,9 @@ impl ImageStore {
     pub fn get_filtered_images(&self, filter: &FileFilters) -> Vec<ImageData> {
         self.available_images
             .iter()
-            .filter(|f| filter.rating[f.rating.clamp(0, 5) as usize])
-            .filter(|f| filter.file_format[&f.format])
-            .filter(|f| {
-                f.path
-                    .file_name()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .contains(&filter.name)
-            })
+            .filter(|f| filter.filter_image(f))
             .map(|f| f.clone())
             .collect::<Vec<ImageData>>()
-    }
-
-    fn filter_image(&self, image: &ImageData, filter: &FileFilters) -> bool {
-        filter.rating[image.rating.clamp(0, 5) as usize]
-            && filter.file_format[&image.format]
-            && image
-                .path
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .contains(&filter.name)
     }
 
     fn evict_images(&mut self, count: usize) {
