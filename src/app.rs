@@ -1,5 +1,4 @@
 use crate::egui_tools::EguiRenderer;
-use egui::gui_zoom::kb_shortcuts::ZOOM_IN;
 use egui::load::{ImageLoadResult, ImageLoader};
 use egui::{
     Align, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Sense,
@@ -40,18 +39,30 @@ pub(crate) struct TransformData {
     width: u32,
     height: u32,
     orientation: Orientation,
+    zoom_center_x: f32,
+    zoom_center_y: f32
 }
 
 #[rustfmt::skip]
-fn create_transform_matrix(data: &TransformData, scale_x: f32, scale_y: f32) -> [f32; 16] {
+fn create_transform_matrix(data: &TransformData, scale_x: f32, scale_y: f32, zoom_center_x: f32, zoom_center_y: f32) -> [f32; 16] {
     const ZOOM_MULTIPLIER: f32 = 3.0;
     let zoom = (data.zoom).powf(ZOOM_MULTIPLIER);
 
-    [
+    // [
+    //     zoom * scale_x, 0.0,            0.0, 0.0,
+    //     0.0,            zoom * scale_y, 0.0, 0.0,
+    //     0.0,            0.0,            1.0, 0.0,
+    //     data.pan_x,     data.pan_y,     0.0, 1.0,
+    // ]
+        let tx = data.pan_x + zoom_center_x * (1.0 - zoom);
+        let ty = data.pan_y + zoom_center_y * (1.0 - zoom);
+
+
+        [
         zoom * scale_x, 0.0,            0.0, 0.0,
         0.0,            zoom * scale_y, 0.0, 0.0,
         0.0,            0.0,            1.0, 0.0,
-        data.pan_x,     data.pan_y,     0.0, 1.0,
+        tx, ty, 0.0, 1.0,
     ]
 }
 
@@ -59,7 +70,6 @@ fn create_inner_render_target(
     device: &wgpu::Device,
     width: u32,
     height: u32,
-    format: wgpu::TextureFormat,
 ) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Inner Render Target"),
@@ -331,8 +341,7 @@ impl AppState {
         let (image_texture, bind_group, render_pipeline, transform_buffer) =
             setup_texture(&device, surface_config.clone(), 8192, 8192);
 
-        let (inner_texture, inner_texture_view) =
-            create_inner_render_target(&device, 8192, 8192, wgpu::TextureFormat::R8Unorm);
+        let (inner_texture, inner_texture_view) = create_inner_render_target(&device, 8192, 8192);
 
         let inner_texture_id = egui_renderer.renderer.register_native_texture(
             &device,
@@ -347,6 +356,8 @@ impl AppState {
             width: 10000,
             height: 10000,
             orientation: Orientation::NoTransforms,
+            zoom_center_x: 0.5,
+            zoom_center_y: 0.5,
         };
 
         Self {
@@ -379,11 +390,11 @@ impl AppState {
     }
 
     pub fn recreate_texture(&mut self) {
+        println!("recreating texture");
         (self.inner_texture, self.inner_texture_view) = create_inner_render_target(
             &self.device,
             self.inner_size.x as u32,
             self.inner_size.y as u32,
-            wgpu::TextureFormat::R8Unorm,
         );
 
         self.inner_texture_id = self.egui_renderer.renderer.register_native_texture(
@@ -445,7 +456,7 @@ impl App {
         if width > 0 && height > 0 {
             self.state.as_mut().unwrap().resize_surface(width, height);
         }
-        self.pan_zoom(0.0, 0.0, 0.0);
+        self.pan_zoom(0.0, 0.0, 0.0, 0.5, 0.5);
     }
 
     pub fn update_texture(&mut self, force: bool) {
@@ -456,15 +467,12 @@ impl App {
             let current_image_selected = state.selected_image == store.current_image_path;
             let current_quality_loaded =
                 state.loaded_thumbnail == store.get_current_image().is_none();
-            // println!(
-            //     "check {} {}",
-            //     current_quality_loaded, current_image_selected
-            // );
             if current_image_selected && current_quality_loaded {
                 return;
             }
         }
         {
+            println!("updating image");
             let mut store = state.store.write().unwrap();
             let imbuf = if let Some(full) = store.get_current_image() {
                 state.loaded_thumbnail = false;
@@ -533,7 +541,7 @@ impl App {
         } else {
             scale_y = window_aspect_ratio / image_aspect_ratio;
         }
-        let transform = create_transform_matrix(&state.transform_data, scale_x, scale_y);
+        let transform = create_transform_matrix(&state.transform_data, scale_x, scale_y, state.transform_data.zoom_center_x, state.transform_data.zoom_center_y);
         state.queue.write_buffer(
             &state.transform_buffer,
             0,
@@ -556,12 +564,14 @@ impl App {
         self.update_transform();
     }
 
-    pub fn pan_zoom(&mut self, zoom_delta: f32, pan_x: f32, pan_y: f32) {
+    pub fn pan_zoom(&mut self, zoom_delta: f32, pan_x: f32, pan_y: f32, zoom_center_x: f32, zoom_center_y: f32) {
         let state = self.state.as_mut().unwrap();
 
         state.transform_data.zoom = (state.transform_data.zoom + zoom_delta).clamp(1.0, 20.0);
         state.transform_data.pan_x += pan_x;
         state.transform_data.pan_y += -pan_y;
+        state.transform_data.zoom_center_x = zoom_center_x;
+        state.transform_data.zoom_center_y = zoom_center_y;
 
         self.update_transform();
     }
@@ -709,6 +719,7 @@ impl App {
         }
         let mut pan_delta = None;
         let mut zoom_delta = None;
+        let mut cursor_position = None;
         let mut reset_transform = false;
         let mut image_size = None;
 
@@ -863,7 +874,7 @@ impl App {
                     image_size = Some(available_size);
 
                     if image_response.dragged() {
-                        pan_delta = Some(image_response.drag_delta() * 0.001);
+                        pan_delta = Some(image_response.drag_delta() / image_size.unwrap());
                     }
 
                     if image_response.clicked_by(egui::PointerButton::Secondary) {
@@ -875,6 +886,12 @@ impl App {
                         if scroll_delta.y != 0.0 {
                             zoom_delta = Some(scroll_delta.y * 0.001);
                         }
+                        let mut relative_position = ui.input(|i| i.pointer.latest_pos().unwrap()).to_vec2() / image_size.unwrap();
+                        relative_position -= Vec2::new(0.5, 0.5);
+                        relative_position *= 2.0;
+                        relative_position.y *= -1.0;
+                        cursor_position = Some(relative_position);
+                        println!("{:?}", cursor_position.unwrap());
                     }
                 });
             });
@@ -900,7 +917,7 @@ impl App {
         surface_texture.present();
 
         if let Some(image_size) = image_size {
-            if image_size != state.inner_size {
+            if image_size != state.inner_size && image_size.min_elem() >= 10.0 {
                 state.inner_size = image_size;
                 state.recreate_texture();
                 self.reset_transform();
@@ -908,10 +925,10 @@ impl App {
         }
         match (pan_delta, zoom_delta) {
             (None, None) => {}
-            (None, Some(zoom_delta)) => self.pan_zoom(zoom_delta, 0.0, 0.0),
-            (Some(pan_delta), None) => self.pan_zoom(0.0, pan_delta.x, pan_delta.y),
+            (None, Some(zoom_delta)) => self.pan_zoom(zoom_delta, 0.0, 0.0, cursor_position.unwrap().x, cursor_position.unwrap().y),
+            (Some(pan_delta), None) => self.pan_zoom(0.0, pan_delta.x, pan_delta.y, cursor_position.unwrap().x, cursor_position.unwrap().y),
             (Some(pan_delta), Some(zoom_delta)) => {
-                self.pan_zoom(zoom_delta, pan_delta.x, pan_delta.y)
+                self.pan_zoom(zoom_delta, pan_delta.x, pan_delta.y, cursor_position.unwrap().x, cursor_position.unwrap().y)
             }
         }
         if reset_transform {
@@ -1019,19 +1036,9 @@ impl ApplicationHandler for App {
                         }
                     });
                 }
-                // if pointer.primary_down() && pointer.is_moving() {
-                //     self.pan_zoom(0.0, pointer.delta().x * 0.001, pointer.delta().y * -0.001);
-                // }
-                // if scroll.y != 0.0 {
-                //     self.pan_zoom(scroll.y * 0.001, 0.0, 0.0);
-                // }
-
                 if updated_image {
                     self.update_texture(false);
                 }
-                // if reset_transform {
-                //     self.reset_transform();
-                // }
                 self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::Resized(new_size) => {
@@ -1044,7 +1051,6 @@ impl ApplicationHandler for App {
 
 pub struct ImflowEguiLoader {
     store: Arc<RwLock<ImageStore>>,
-    // stored: Option<ImageLoadResult>,
     cache: egui::mutex::Mutex<HashMap<String, ImageLoadResult>>,
 }
 
