@@ -256,7 +256,7 @@ pub struct AppState {
     inner_texture: wgpu::Texture,
     inner_texture_view: wgpu::TextureView,
     inner_texture_id: egui::TextureId,
-    // inner_size: (u32, u32)
+    inner_size: Vec2, // inner_size: (u32, u32)
 }
 
 impl AppState {
@@ -327,6 +327,7 @@ impl AppState {
 
         let scale_factor = 1.0;
 
+        let inner_size = Vec2::new(8192.0, 8192.0);
         let (image_texture, bind_group, render_pipeline, transform_buffer) =
             setup_texture(&device, surface_config.clone(), 8192, 8192);
 
@@ -367,6 +368,7 @@ impl AppState {
             inner_texture,
             inner_texture_view,
             inner_texture_id,
+            inner_size,
         }
     }
 
@@ -376,9 +378,20 @@ impl AppState {
         self.surface.configure(&self.device, &self.surface_config);
     }
 
-    // fn get_store(&mut self) -> &ImageStore {
-    //     &self.store.lock().unwrap()
-    // }
+    pub fn recreate_texture(&mut self) {
+        (self.inner_texture, self.inner_texture_view) = create_inner_render_target(
+            &self.device,
+            self.inner_size.x as u32,
+            self.inner_size.y as u32,
+            wgpu::TextureFormat::R8Unorm,
+        );
+
+        self.inner_texture_id = self.egui_renderer.renderer.register_native_texture(
+            &self.device,
+            &self.inner_texture_view,
+            wgpu::FilterMode::Linear,
+        );
+    }
 }
 
 pub struct App {
@@ -511,8 +524,8 @@ impl App {
             state.transform_data.orientation,
         );
         let image_aspect_ratio = (width as f32) / (height as f32);
-        let window_size = self.window.as_ref().unwrap().inner_size();
-        let window_aspect_ratio = window_size.width as f32 / window_size.height as f32;
+        let window_size = state.inner_size;
+        let window_aspect_ratio = window_size.x / window_size.y;
         let mut scale_x = 1.0;
         let mut scale_y = 1.0;
         if window_aspect_ratio > image_aspect_ratio {
@@ -697,6 +710,7 @@ impl App {
         let mut pan_delta = None;
         let mut zoom_delta = None;
         let mut reset_transform = false;
+        let mut image_size = None;
 
         // let mut file_filters;
         let rating;
@@ -769,7 +783,8 @@ impl App {
             }
 
             egui::TopBottomPanel::bottom("Thumbnails")
-                .exact_height(120.0)
+                .default_height(120.0)
+                .resizable(true)
                 .show(state.egui_renderer.context(), |panel_ui| {
                     egui::ScrollArea::horizontal()
                         .max_width(f32::INFINITY)
@@ -845,6 +860,8 @@ impl App {
                         .sense(Sense::click_and_drag()),
                     );
 
+                    image_size = Some(available_size);
+
                     if image_response.dragged() {
                         pan_delta = Some(image_response.drag_delta() * 0.001);
                     }
@@ -882,6 +899,13 @@ impl App {
         state.queue.submit(Some(encoder.finish()));
         surface_texture.present();
 
+        if let Some(image_size) = image_size {
+            if image_size != state.inner_size {
+                state.inner_size = image_size;
+                state.recreate_texture();
+                self.reset_transform();
+            }
+        }
         match (pan_delta, zoom_delta) {
             (None, None) => {}
             (None, Some(zoom_delta)) => self.pan_zoom(zoom_delta, 0.0, 0.0),
