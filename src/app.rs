@@ -1,6 +1,10 @@
 use crate::egui_tools::EguiRenderer;
+use egui::gui_zoom::kb_shortcuts::ZOOM_IN;
 use egui::load::{ImageLoadResult, ImageLoader};
-use egui::{Align, Color32, ColorImage, Event, ImageSource, Key, PointerButton, Sense};
+use egui::{
+    Align, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Sense,
+    TextureOptions, Vec2,
+};
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::metadata::Orientation;
@@ -41,7 +45,7 @@ pub(crate) struct TransformData {
 #[rustfmt::skip]
 fn create_transform_matrix(data: &TransformData, scale_x: f32, scale_y: f32) -> [f32; 16] {
     const ZOOM_MULTIPLIER: f32 = 3.0;
-    let zoom = (data.zoom - 0.075).powf(ZOOM_MULTIPLIER);
+    let zoom = (data.zoom).powf(ZOOM_MULTIPLIER);
 
     [
         zoom * scale_x, 0.0,            0.0, 0.0,
@@ -49,6 +53,30 @@ fn create_transform_matrix(data: &TransformData, scale_x: f32, scale_y: f32) -> 
         0.0,            0.0,            1.0, 0.0,
         data.pan_x,     data.pan_y,     0.0, 1.0,
     ]
+}
+
+fn create_inner_render_target(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Inner Render Target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    (texture, view)
 }
 
 fn setup_texture(
@@ -225,6 +253,10 @@ pub struct AppState {
     pub filters: FileFilters,
     pub selected_image: ImageData,
     pub loaded_thumbnail: bool,
+    inner_texture: wgpu::Texture,
+    inner_texture_view: wgpu::TextureView,
+    inner_texture_id: egui::TextureId,
+    // inner_size: (u32, u32)
 }
 
 impl AppState {
@@ -281,7 +313,7 @@ impl AppState {
 
         surface.configure(&device, &surface_config);
 
-        let egui_renderer = EguiRenderer::new(&device, surface_config.format, None, 1, window);
+        let mut egui_renderer = EguiRenderer::new(&device, surface_config.format, None, 1, window);
 
         let image_store = ImageStore::new(path);
 
@@ -297,6 +329,15 @@ impl AppState {
 
         let (image_texture, bind_group, render_pipeline, transform_buffer) =
             setup_texture(&device, surface_config.clone(), 8192, 8192);
+
+        let (inner_texture, inner_texture_view) =
+            create_inner_render_target(&device, 8192, 8192, wgpu::TextureFormat::R8Unorm);
+
+        let inner_texture_id = egui_renderer.renderer.register_native_texture(
+            &device,
+            &inner_texture_view,
+            wgpu::FilterMode::Linear,
+        );
 
         let transform_data = TransformData {
             pan_x: 0.0,
@@ -323,6 +364,9 @@ impl AppState {
             filters: FileFilters::default(),
             selected_image,
             loaded_thumbnail: false,
+            inner_texture,
+            inner_texture_view,
+            inner_texture_id,
         }
     }
 
@@ -504,13 +548,12 @@ impl App {
 
         state.transform_data.zoom = (state.transform_data.zoom + zoom_delta).clamp(1.0, 20.0);
         state.transform_data.pan_x += pan_x;
-        state.transform_data.pan_y += pan_y;
+        state.transform_data.pan_y += -pan_y;
 
         self.update_transform();
     }
 
     fn handle_redraw(&mut self) {
-        // Attempt to handle minimizing window
         if let Some(window) = self.window.as_ref() {
             if let Some(min) = window.is_minimized() {
                 if min {
@@ -560,7 +603,7 @@ impl App {
             let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
+                    view: &state.inner_texture_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -629,7 +672,7 @@ impl App {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Texture Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
+                    view: &state.inner_texture_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -651,6 +694,9 @@ impl App {
             render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.draw_indexed(0..6, 0, 0..1);
         }
+        let mut pan_delta = None;
+        let mut zoom_delta = None;
+        let mut reset_transform = false;
 
         // let mut file_filters;
         let rating;
@@ -782,6 +828,40 @@ impl App {
                 }
             });
 
+            egui::CentralPanel::default().show(state.egui_renderer.context(), |ui| {
+                let available_size = ui.available_size();
+                ui.centered_and_justified(|ui| {
+                    let image_response = ui.add(
+                        Image::new((
+                            state.inner_texture_id,
+                            Vec2::new(
+                                state.inner_texture.size().width as f32,
+                                state.inner_texture.size().height as f32,
+                            ),
+                        ))
+                        .texture_options(TextureOptions::LINEAR)
+                        .maintain_aspect_ratio(true)
+                        .fit_to_exact_size(available_size)
+                        .sense(Sense::click_and_drag()),
+                    );
+
+                    if image_response.dragged() {
+                        pan_delta = Some(image_response.drag_delta() * 0.001);
+                    }
+
+                    if image_response.clicked_by(egui::PointerButton::Secondary) {
+                        reset_transform = true;
+                    }
+
+                    if image_response.hovered() {
+                        let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
+                        if scroll_delta.y != 0.0 {
+                            zoom_delta = Some(scroll_delta.y * 0.001);
+                        }
+                    }
+                });
+            });
+
             if let Ok(mut store) = state.store.write() {
                 store.image_changed = false;
                 if let Some(selected_image) = selected_image {
@@ -801,6 +881,18 @@ impl App {
 
         state.queue.submit(Some(encoder.finish()));
         surface_texture.present();
+
+        match (pan_delta, zoom_delta) {
+            (None, None) => {}
+            (None, Some(zoom_delta)) => self.pan_zoom(zoom_delta, 0.0, 0.0),
+            (Some(pan_delta), None) => self.pan_zoom(0.0, pan_delta.x, pan_delta.y),
+            (Some(pan_delta), Some(zoom_delta)) => {
+                self.pan_zoom(zoom_delta, pan_delta.x, pan_delta.y)
+            }
+        }
+        if reset_transform {
+            self.reset_transform();
+        }
 
         self.update_texture(false);
     }
@@ -903,19 +995,19 @@ impl ApplicationHandler for App {
                         }
                     });
                 }
-                if pointer.primary_down() && pointer.is_moving() {
-                    self.pan_zoom(0.0, pointer.delta().x * 0.001, pointer.delta().y * -0.001);
-                }
-                if scroll.y != 0.0 {
-                    self.pan_zoom(scroll.y * 0.001, 0.0, 0.0);
-                }
+                // if pointer.primary_down() && pointer.is_moving() {
+                //     self.pan_zoom(0.0, pointer.delta().x * 0.001, pointer.delta().y * -0.001);
+                // }
+                // if scroll.y != 0.0 {
+                //     self.pan_zoom(scroll.y * 0.001, 0.0, 0.0);
+                // }
 
                 if updated_image {
                     self.update_texture(false);
                 }
-                if reset_transform {
-                    self.reset_transform();
-                }
+                // if reset_transform {
+                //     self.reset_transform();
+                // }
                 self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::Resized(new_size) => {
