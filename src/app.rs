@@ -1,10 +1,9 @@
 use crate::egui_tools::EguiRenderer;
 use egui::load::{ImageLoadResult, ImageLoader};
 use egui::{
-    Align, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Sense,
-    TextureOptions, Vec2,
+    Align, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Pos2, Sense, TextureOptions, Vec2
 };
-use egui_wgpu::wgpu::SurfaceError;
+use egui_wgpu::wgpu::{Limits, SurfaceError};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::metadata::Orientation;
 use imflow::image::{ImageData, swap_wh};
@@ -21,6 +20,8 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::platform::x11::WindowAttributesExtX11;
 use winit::window::{Window, WindowId};
+
+pub const MAX_IMAGE_SIZE: u32 = 8192 * 2;
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -289,12 +290,14 @@ impl AppState {
             .expect("Failed to find an appropriate adapter");
 
         let features = wgpu::Features::empty();
+        let mut limits = Limits::default();
+        limits.max_texture_dimension_2d = 8192 * 2;
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
                     required_features: features,
-                    required_limits: Default::default(),
+                    required_limits: limits,
                     memory_hints: Default::default(),
                 },
                 None,
@@ -337,11 +340,11 @@ impl AppState {
 
         let scale_factor = 1.0;
 
-        let inner_size = Vec2::new(8192.0, 8192.0);
+        let inner_size = Vec2::new(MAX_IMAGE_SIZE as f32, MAX_IMAGE_SIZE as f32);
         let (image_texture, bind_group, render_pipeline, transform_buffer) =
-            setup_texture(&device, surface_config.clone(), 8192, 8192);
+            setup_texture(&device, surface_config.clone(), MAX_IMAGE_SIZE, MAX_IMAGE_SIZE);
 
-        let (inner_texture, inner_texture_view) = create_inner_render_target(&device, 8192, 8192);
+        let (inner_texture, inner_texture_view) = create_inner_render_target(&device, MAX_IMAGE_SIZE, MAX_IMAGE_SIZE);
 
         let inner_texture_id = egui_renderer.renderer.register_native_texture(
             &device,
@@ -472,7 +475,6 @@ impl App {
             }
         }
         {
-            println!("updating image");
             let mut store = state.store.write().unwrap();
             let imbuf = if let Some(full) = store.get_current_image() {
                 state.loaded_thumbnail = false;
@@ -481,6 +483,7 @@ impl App {
                 state.loaded_thumbnail = true;
                 store.get_thumbnail()
             };
+            println!("updating image: {:?} {:?}", imbuf.width, imbuf.height);
             let width = imbuf.width as u32;
             let height = imbuf.height as u32;
             let buffer_u8 = unsafe {
@@ -886,12 +889,13 @@ impl App {
                         if scroll_delta.y != 0.0 {
                             zoom_delta = Some(scroll_delta.y * 0.001);
                         }
-                        let mut relative_position = ui.input(|i| i.pointer.latest_pos().unwrap()).to_vec2() / image_size.unwrap();
-                        relative_position -= Vec2::new(0.5, 0.5);
-                        relative_position *= 2.0;
-                        relative_position.y *= -1.0;
-                        cursor_position = Some(relative_position);
-                        println!("{:?}", cursor_position.unwrap());
+                        if let Some(latest_pos) = ui.input(|i| i.pointer.latest_pos().map(Pos2::to_vec2)) {
+                            let mut relative_position = latest_pos / image_size.unwrap();
+                            relative_position -= Vec2::new(0.5, 0.5);
+                            relative_position *= 2.0;
+                            relative_position.y *= -1.0;
+                            cursor_position = Some(relative_position);
+                        }
                     }
                 });
             });
