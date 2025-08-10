@@ -18,6 +18,7 @@ use zune_image::codecs::jpeg::JpegDecoder;
 use zune_image::codecs::qoi::zune_core::colorspace::ColorSpace;
 use zune_image::codecs::qoi::zune_core::options::DecoderOptions;
 
+use std::cmp::max;
 use std::env;
 use std::fmt::Display;
 // use std::fmt::Write;
@@ -421,13 +422,14 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     let lib_heif = LibHeif::new();
     let ctx = HeifContext::read_from_file(path.path.to_str().unwrap()).unwrap();
     let mut orientation = Orientation::NoTransforms;
+    let binding = ctx.top_level_image_handles();
+    let handle = binding.get(0).unwrap();
+    let thumbnail_count = handle.number_of_thumbnails() as u32;
 
-    let image = if resize {
-        let binding = ctx.top_level_image_handles();
-        let handle = binding.get(0).unwrap();
-        let thumbnail_count = handle.number_of_thumbnails() as u32;
+    let mut image = if resize && thumbnail_count > 0 {
         let mut thumbnail_ids = vec![0u32, thumbnail_count];
-        handle.thumbnail_ids(&mut thumbnail_ids);
+        let cnt = handle.thumbnail_ids(&mut thumbnail_ids);
+        assert_ne!(cnt, 0);
         let handle = &handle.thumbnail(thumbnail_ids[0]).unwrap();
 
         let width = handle.width();
@@ -475,16 +477,16 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     );
 
     // Scale the image
-    // if resize {
-    //     const MAX: usize = 3000;
-    //     let scale = max(width, height) as f32 / MAX as f32;
-    //     width = (width as f32 / scale) as usize;
-    //     height = (height as f32 / scale) as usize;
-    //     // image = image.scale(width as u32, height as u32, None).unwrap();
-    //     image = image.scale(599, 300, None).unwrap();
-    //     width = image.width() as usize;
-    //     height = image.height() as usize;
-    // }
+    if resize && thumbnail_count == 0 {
+        const MAX: usize = 600;
+        let mut width = image.width() as usize;
+        let mut height = image.height() as usize;
+        let scale = max(width, height) as f32 / MAX as f32;
+        // Round to nearest multiple of 4
+        width = ((width as f32 / scale) as usize) + 7 & !7;
+        height = ((height as f32 / scale) as usize) + 7 & !7;
+        image = image.scale(width as u32, height as u32, None).unwrap();
+    }
 
     // Get "pixels"
     let planes = image.planes();
