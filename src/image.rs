@@ -66,6 +66,7 @@ impl ImageData {
     pub fn get_cache_path(&self) -> PathBuf {
         let home_dir = PathBuf::from_str(&env::var("HOME").unwrap()).unwrap();
         let cache_dir = home_dir.join(".cache/imflow");
+        // TODO: fix race condition
         if !cache_dir.exists() {
             fs::create_dir(&cache_dir).unwrap();
         }
