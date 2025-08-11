@@ -1028,6 +1028,11 @@ impl ApplicationHandler for App {
                                 Key::Num4 => store.set_rating(4),
                                 Key::Num5 => store.set_rating(5),
                                 Key::Escape => exit(0),
+                                Key::Space => {
+                                    if let Err(e) = open::that(store.current_image_path.path.clone()) {
+                                        println!("Error while opening file: {}", e);
+                                    }
+                                },
                                 _ => {}
                             }
                         } else if let Event::PointerButton {
