@@ -36,9 +36,10 @@ fn fs_main(@location(0) in: vec2<f32>) -> @location(0) vec4<f32> {
     var texture_size = vec2<f32>(f32(transforms.width), f32(transforms.height));
     let out_dim = vec2<f32>(textureDimensions(texture));
     var uv = in;
-    if transforms.orientation == 2 {
+    if transforms.orientation == 1 {
         uv.x = 1.0-uv.x;
-    } else if transforms.orientation == 3 {
+    }
+    if transforms.orientation == 3 || transforms.orientation == 5 || transforms.orientation == 2 {
         uv.y = 1.0-uv.y;
     }
     let scale = texture_size / out_dim;

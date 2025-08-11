@@ -483,7 +483,7 @@ impl App {
                 state.loaded_thumbnail = true;
                 store.get_thumbnail()
             };
-            println!("updating image: {:?} {:?}", imbuf.width, imbuf.height);
+            println!("updating image: {:?} {:?} {:?}", imbuf.width, imbuf.height, imbuf.orientation);
             let width = imbuf.width as u32;
             let height = imbuf.height as u32;
             let buffer_u8 = unsafe {
@@ -526,9 +526,9 @@ impl App {
         let state = self.state.as_mut().unwrap();
 
         // TODO: Remove obviously
-        if state.transform_data.width < 800 {
-            state.transform_data.orientation = Orientation::NoTransforms;
-        }
+        // if state.transform_data.width < 800 {
+        //     state.transform_data.orientation = Orientation::NoTransforms;
+        // }
         let (width, height) = swap_wh(
             state.transform_data.width,
             state.transform_data.height,
