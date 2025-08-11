@@ -37,6 +37,8 @@ impl Default for FileFilters {
         formats.insert(ImageFormat::Jpg, true);
         formats.insert(ImageFormat::Jxl, true);
         formats.insert(ImageFormat::Heif, true);
+        // TODO: Refactor such that it's not possible to miss an enum
+        formats.insert(ImageFormat::Video, true);
         let mut tags = HashMap::new();
         tags.insert(EDIT_TAG.to_string(), false);
         tags.insert(CROP_TAG.to_string(), false);

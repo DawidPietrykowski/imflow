@@ -1,3 +1,5 @@
+use ffmpeg_next::ffi;
+use ffmpeg_next as ffmpeg;
 use image::DynamicImage;
 use image::ImageBuffer;
 use image::Rgba;
@@ -39,6 +41,7 @@ pub enum ImageFormat {
     Jpg,
     Jxl,
     Heif,
+    Video,
 }
 
 impl Display for ImageFormat {
@@ -47,6 +50,7 @@ impl Display for ImageFormat {
             ImageFormat::Jpg => f.write_str("JPG"),
             ImageFormat::Jxl => f.write_str("JXL"),
             ImageFormat::Heif => f.write_str("HEIF"),
+            ImageFormat::Video => f.write_str("VID"),
         }
     }
 }
@@ -151,6 +155,8 @@ fn get_format(path: &PathBuf) -> Option<ImageFormat> {
         Some(ImageFormat::Jpg)
     } else if ["jxl"].contains(extension) {
         Some(ImageFormat::Jxl)
+    } else if ["mp4", "mov", "avi"].contains(extension) {
+        Some(ImageFormat::Video)
     } else {
         None
     }
@@ -224,6 +230,7 @@ pub fn load_image(image: &ImageData) -> ImflowImageBuffer {
                 orientation,
             }
         }
+        ImageFormat::Video => load_thumbnail_video(image).unwrap(),
     }
 }
 
@@ -275,6 +282,7 @@ pub fn load_available_images(dir: PathBuf) -> Vec<ImageData> {
                 } else {
                     meta.get_preview_images().is_some()
                 };
+                println!("{:?} {:?}", path, meta.get_orientation());
                 let orientation = Orientation::from_exif(meta.get_orientation() as u8)
                     .unwrap_or(Orientation::NoTransforms);
                 let hash = get_file_hash(&path);
@@ -351,10 +359,10 @@ pub fn load_thumbnail(path: &ImageData) -> ImflowImageBuffer {
             orientation,
         };
     }
-    let thumbnail = if path.format == ImageFormat::Heif {
-        load_heif(path, true)
-    } else {
-        load_thumbnail_exif(path).unwrap_or_else(|| load_thumbnail_full(path))
+    let thumbnail = match path.format {
+        ImageFormat::Heif => load_heif(path, true),
+        ImageFormat::Video => load_thumbnail_video(path).unwrap(),
+        _ => load_thumbnail_exif(path).unwrap_or_else(|| load_thumbnail_full(path)),
     };
 
     save_thumbnail(&cache_path, thumbnail.clone());
@@ -393,6 +401,71 @@ pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
     } else {
         None
     }
+}
+
+pub fn load_thumbnail_video(path: &ImageData) -> Option<ImflowImageBuffer> {
+    let mut ictx = ffmpeg::format::input(&path.path).unwrap();
+    let best_video_stream_index = ictx
+        .streams()
+        .best(ffmpeg::media::Type::Video)
+        .map(|stream| stream.index())
+        .unwrap();
+    let stream = ictx.stream(best_video_stream_index).unwrap();
+    let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+        .unwrap()
+        .decoder()
+        .video()
+        .unwrap();
+
+    let mut decoded_frame = None;
+    let mut orientation = None;
+    for (stream, packet) in ictx.packets() {
+        if stream.index() == best_video_stream_index {
+            if let Some(side_data) = stream.side_data().find(|s| s.kind() == ffmpeg_next::packet::side_data::Type::DisplayMatrix) {
+                let mat_ptr = side_data.data().as_ptr() as *const ffi::__int32_t;
+                let angle = unsafe { ffi::av_display_rotation_get(mat_ptr) } as i64;
+                let angle = ((angle % 360) + 360) % 360;
+                println!("angle: {}", angle);
+                orientation = Some(match angle {
+                    90 => Orientation::Rotate90,
+                    180 => Orientation::Rotate180,
+                    270 => Orientation::Rotate90,
+                    _ => panic!(),
+                })
+            };
+            if decoder.send_packet(&packet).is_ok() {
+                let mut decoded = ffmpeg::frame::Video::empty();
+                if decoder.receive_frame(&mut decoded).is_ok() {
+                    decoded_frame = Some(decoded);
+                    break;
+                }
+            }
+        }
+    }
+    let key_frame = decoded_frame.unwrap();
+
+    let mut scaler = ffmpeg::software::scaling::context::Context::get(
+        decoder.format(),
+        decoder.width(),
+        decoder.height(),
+        ffmpeg::format::Pixel::RGBA,
+        decoder.width() / 8,
+        decoder.height() / 8,
+        ffmpeg::software::scaling::flag::Flags::BILINEAR,
+    )
+    .ok()?;
+
+    let mut rgba_frame = ffmpeg::frame::Video::empty();
+    scaler.run(&key_frame, &mut rgba_frame).ok()?;
+
+    let buffer = rgba_frame.plane::<[u8; 4]>(0).as_flattened();
+    let buffer = vec_u8_to_u32(buffer.to_vec());
+    Some(ImflowImageBuffer {
+        width: rgba_frame.width() as usize,
+        height: rgba_frame.height() as usize,
+        rgba_buffer: buffer.to_vec(),
+        orientation: orientation.unwrap_or(Orientation::NoTransforms),
+    })
 }
 
 pub fn load_thumbnail_full(path: &ImageData) -> ImflowImageBuffer {
