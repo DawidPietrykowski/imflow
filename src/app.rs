@@ -426,6 +426,15 @@ impl App {
         }
     }
 
+    fn is_visible(&self) -> bool {
+        if let Some(w) = self.window.as_ref() {
+            if w.is_minimized().unwrap_or(false) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     async fn set_window(&mut self, window: Window) {
         let window = Arc::new(window);
         let initial_height = 1200;
@@ -462,7 +471,7 @@ impl App {
         self.pan_zoom(0.0, 0.0, 0.0, 0.5, 0.5);
     }
 
-    pub fn update_texture(&mut self, force: bool) {
+    pub fn update_texture(&mut self, force: bool) -> bool {
         let state = self.state.as_mut().unwrap();
         if !force {
             let mut store = state.store.write().unwrap();
@@ -471,7 +480,7 @@ impl App {
             let current_quality_loaded =
                 state.loaded_thumbnail == store.get_current_image().is_none();
             if current_image_selected && current_quality_loaded {
-                return;
+                return false;
             }
         }
         {
@@ -520,6 +529,7 @@ impl App {
         }
 
         self.update_transform();
+        true
     }
 
     fn update_transform(&mut self) {
@@ -579,15 +589,21 @@ impl App {
         self.update_transform();
     }
 
-    fn handle_redraw(&mut self) {
+    fn handle_redraw(&mut self) -> bool {
+        println!("handle_redraw->can_render: {}", self.is_visible());
+        if !self.is_visible() {
+            return false;
+        }
         if let Some(window) = self.window.as_ref() {
             if let Some(min) = window.is_minimized() {
                 if min {
                     println!("Window is minimized");
-                    return;
+                    return false;
                 }
             }
         }
+
+        let mut needs_redraw = false;
 
         let state = self.state.as_mut().unwrap();
 
@@ -601,17 +617,16 @@ impl App {
 
         let surface_texture = match surface_texture {
             Err(SurfaceError::Outdated) => {
-                // Ignoring outdated to allow resizing and minimization
                 println!("wgpu surface outdated");
-                return;
+                return false;
             }
             Err(SurfaceError::Timeout) => {
                 println!("wgpu surface timeout");
-                return;
+                return false;
             }
             Err(_) => {
                 surface_texture.expect("Failed to acquire next swap chain texture");
-                return;
+                return false;
             }
             Ok(surface_texture) => surface_texture,
         };
@@ -925,8 +940,14 @@ impl App {
                 state.inner_size = image_size;
                 state.recreate_texture();
                 self.reset_transform();
+                needs_redraw = true;
             }
         }
+        let any_movement = match (pan_delta, zoom_delta) {
+            (None, None) => false,
+            _ => true,
+        };
+        needs_redraw |= any_movement;
         match (pan_delta, zoom_delta) {
             (None, None) => {}
             (None, Some(zoom_delta)) => self.pan_zoom(zoom_delta, 0.0, 0.0, cursor_position.unwrap().x, cursor_position.unwrap().y),
@@ -937,9 +958,13 @@ impl App {
         }
         if reset_transform {
             self.reset_transform();
+            needs_redraw = true;
         }
 
-        self.update_texture(false);
+        if self.update_texture(false) {
+            needs_redraw = true;
+        }
+        needs_redraw
     }
 }
 
@@ -953,12 +978,26 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
-        // let egui render to process the event first
-        self.state
-            .as_mut()
-            .unwrap()
-            .egui_renderer
-            .handle_input(self.window.as_ref().unwrap(), &event);
+        if let (Some(state), Some(window)) = (self.state.as_mut(), self.window.as_ref()) {
+            state.egui_renderer.handle_input(window, &event);
+
+            if state.egui_renderer.context().has_requested_repaint() {
+                window.request_redraw();
+            }
+        }
+
+        match &event {
+            WindowEvent::KeyboardInput { .. }
+            | WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::CursorMoved { .. }
+            | WindowEvent::Touch(_) => {
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            _ => {}
+        }
 
         match event {
             WindowEvent::CloseRequested => {
@@ -966,7 +1005,12 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                self.handle_redraw();
+                if !self.is_visible() {
+                    return;
+                }
+                let mut wants_redraw = self.handle_redraw();
+                println!("handle_redraw returned: {}", wants_redraw);
+
                 let (events, _keys_down, pointer, scroll) = self
                     .state
                     .as_ref()
@@ -1029,7 +1073,7 @@ impl ApplicationHandler for App {
                                 Key::Num5 => store.set_rating(5),
                                 Key::Escape => exit(0),
                                 Key::Space => {
-                                    if let Err(e) = open::that(store.current_image_path.path.clone()) {
+                                    if let Err(e) = open::that_detached(store.current_image_path.path.clone()) {
                                         println!("Error while opening file: {}", e);
                                     }
                                 },
@@ -1048,10 +1092,31 @@ impl ApplicationHandler for App {
                 if updated_image {
                     self.update_texture(false);
                 }
-                self.window.as_ref().unwrap().request_redraw();
+                println!("wants: {}", wants_redraw);
+                wants_redraw |= updated_image;
+                if reset_transform {
+                    self.reset_transform();
+                }
+                println!("wants: {}", wants_redraw);
+                wants_redraw |= reset_transform;
+
+                println!("wants: {}", wants_redraw);
+                wants_redraw |= self
+                    .state
+                    .as_ref()
+                    .unwrap()
+                    .egui_renderer
+                    .context()
+                    .has_requested_repaint();
+
+                println!("wants: {}\n", wants_redraw);
+                if wants_redraw {
+                    self.window.as_ref().unwrap().request_redraw();
+                }
             }
             WindowEvent::Resized(new_size) => {
                 self.handle_resized(new_size.width, new_size.height);
+                self.window.as_ref().unwrap().request_redraw();
             }
             _ => (),
         }
