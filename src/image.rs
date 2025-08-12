@@ -1,5 +1,5 @@
-use ffmpeg_next::ffi;
 use ffmpeg_next as ffmpeg;
+use ffmpeg_next::ffi;
 use image::DynamicImage;
 use image::ImageBuffer;
 use image::Rgba;
@@ -35,6 +35,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Instant;
+
+use crate::xmp::read_rating_xmp;
 
 #[derive(Clone, Eq, Hash, PartialEq, PartialOrd)]
 pub enum ImageFormat {
@@ -282,14 +284,16 @@ pub fn load_available_images(dir: PathBuf) -> Vec<ImageData> {
                 } else {
                     meta.get_preview_images().is_some()
                 };
-                println!("{:?} {:?}", path, meta.get_orientation());
                 let orientation = Orientation::from_exif(meta.get_orientation() as u8)
                     .unwrap_or(Orientation::NoTransforms);
                 let hash = get_file_hash(&path);
-                let rating = meta.get_tag_numeric("Xmp.xmp.Rating");
                 let tags = meta
                     .get_tag_multiple_strings("Xmp.digiKam.TagsList")
                     .unwrap_or_default();
+                let rating = match format {
+                    ImageFormat::Video => read_rating_xmp(path.clone()).unwrap_or(0),
+                    _ => meta.get_tag_numeric("Xmp.xmp.Rating"),
+                };
                 Some(ImageData {
                     path,
                     format,
@@ -421,7 +425,10 @@ pub fn load_thumbnail_video(path: &ImageData) -> Option<ImflowImageBuffer> {
     let mut orientation = None;
     for (stream, packet) in ictx.packets() {
         if stream.index() == best_video_stream_index {
-            if let Some(side_data) = stream.side_data().find(|s| s.kind() == ffmpeg_next::packet::side_data::Type::DisplayMatrix) {
+            if let Some(side_data) = stream
+                .side_data()
+                .find(|s| s.kind() == ffmpeg_next::packet::side_data::Type::DisplayMatrix)
+            {
                 let mat_ptr = side_data.data().as_ptr() as *const ffi::__int32_t;
                 let angle = unsafe { ffi::av_display_rotation_get(mat_ptr) } as i64;
                 let angle = ((angle % 360) + 360) % 360;
@@ -449,8 +456,8 @@ pub fn load_thumbnail_video(path: &ImageData) -> Option<ImflowImageBuffer> {
         decoder.width(),
         decoder.height(),
         ffmpeg::format::Pixel::RGBA,
-        decoder.width() / 8,
-        decoder.height() / 8,
+        (decoder.width() / 4) & !7,
+        (decoder.height() / 4) & !7,
         ffmpeg::software::scaling::flag::Flags::BILINEAR,
     )
     .ok()?;

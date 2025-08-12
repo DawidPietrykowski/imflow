@@ -29,6 +29,8 @@ exiftool = "0.2.3"
 rustc-hash = "2.1.1"
 open = "5.3.2"
 ffmpeg-next = "7.1.0"
+xmp_toolkit = "1.10.0"
+anyhow = "1.0.99"
 
 [profile.release]
 opt-level = 3
