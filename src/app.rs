@@ -10,6 +10,7 @@ use image::metadata::Orientation;
 use imflow::image::{ImageData, swap_wh};
 use imflow::store::{CROP_TAG, EDIT_TAG, FileFilters, ImageStore, TagAction};
 use std::collections::HashMap;
+use std::f32::consts::PI;
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::{Arc, RwLock};
@@ -627,7 +628,7 @@ impl App {
     }
 
     fn handle_redraw(&mut self) -> bool {
-        println!("handle_redraw->can_render: {}", self.is_visible());
+        // println!("handle_redraw->can_render: {}", self.is_visible());
         if !self.is_visible() {
             return false;
         }
@@ -874,15 +875,26 @@ impl App {
                                         .corner_radius(10)
                                         .sense(Sense::click());
                                     if !image.embedded_thumbnail {
-                                        egui_image =
-                                            egui_image.uv(get_uv_transform(image.orientation));
+                                        if [
+                                            Orientation::Rotate90,
+                                            Orientation::Rotate270,
+                                            Orientation::Rotate90FlipH,
+                                            Orientation::Rotate270FlipH,
+                                        ]
+                                        .contains(&image.orientation)
+                                        {
+                                            egui_image =
+                                                egui_image.rotate(PI / 2.0, Vec2::splat(0.5));
+                                        } else {
+                                            egui_image =
+                                                egui_image.uv(get_uv_transform(image.orientation));
+                                        }
                                     }
                                     let image_widget = horizontal.add(egui_image);
                                     if changed_image && current_image == image {
                                         image_widget.scroll_to_me(Some(Align::Center));
                                     }
                                     if image_widget.clicked() {
-                                        println!("{}", image.get_hash_str());
                                         selected_image = Some(image);
                                     }
                                 }
@@ -1067,7 +1079,7 @@ impl ApplicationHandler for App {
                     return;
                 }
                 let mut wants_redraw = self.handle_redraw();
-                println!("handle_redraw returned: {}", wants_redraw);
+                // println!("handle_redraw returned: {}", wants_redraw);
 
                 let (events, _keys_down, _pointer, _scroll) = self
                     .state
@@ -1152,15 +1164,15 @@ impl ApplicationHandler for App {
                 if updated_image {
                     self.update_texture(false);
                 }
-                println!("wants: {}", wants_redraw);
+                // println!("wants: {}", wants_redraw);
                 wants_redraw |= updated_image;
                 if reset_transform {
                     self.reset_transform();
                 }
-                println!("wants: {}", wants_redraw);
+                // println!("wants: {}", wants_redraw);
                 wants_redraw |= reset_transform;
 
-                println!("wants: {}", wants_redraw);
+                // println!("wants: {}", wants_redraw);
                 wants_redraw |= self
                     .state
                     .as_ref()
@@ -1169,7 +1181,7 @@ impl ApplicationHandler for App {
                     .context()
                     .has_requested_repaint();
 
-                println!("wants: {}\n", wants_redraw);
+                // println!("wants: {}\n", wants_redraw);
                 if wants_redraw {
                     self.window.as_ref().unwrap().request_redraw();
                 }
@@ -1221,12 +1233,12 @@ impl ImageLoader for ImflowEguiLoader {
             };
             let mut image = ColorImage::new([imbuf.width, imbuf.height], Color32::BLACK);
             let image_buffer = image.as_raw_mut();
-            println!(
-                "w: {} h: {} len: {}",
-                imbuf.width,
-                imbuf.height,
-                imbuf.rgba_buffer.len()
-            );
+            // println!(
+            //     "w: {} h: {} len: {}",
+            //     imbuf.width,
+            //     imbuf.height,
+            //     imbuf.rgba_buffer.len()
+            // );
             for (i, &value) in imbuf.rgba_buffer.iter().enumerate() {
                 let bytes = value.to_le_bytes();
                 let start = i * 4;

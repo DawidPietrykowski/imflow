@@ -232,7 +232,7 @@ pub fn load_image(image: &ImageData) -> ImflowImageBuffer {
                 orientation,
             }
         }
-        ImageFormat::Video => load_thumbnail_video(image).unwrap(),
+        ImageFormat::Video => load_thumbnail_video(&image.path).unwrap(),
     }
 }
 
@@ -281,11 +281,17 @@ pub fn load_available_images(dir: PathBuf) -> Vec<ImageData> {
                     let binding = ctx.top_level_image_handles();
                     let handle = binding.get(0).unwrap();
                     handle.number_of_thumbnails() > 0
+                } else if format == ImageFormat::Video {
+                    false
                 } else {
                     meta.get_preview_images().is_some()
                 };
-                let orientation = Orientation::from_exif(meta.get_orientation() as u8)
+                let mut orientation = Orientation::from_exif(meta.get_orientation() as u8)
                     .unwrap_or(Orientation::NoTransforms);
+                if format == ImageFormat::Video {
+                    orientation = load_thumbnail_video(&path).unwrap().orientation;
+                    println!("video orientation: {:?}, {:?}", orientation, path);
+                }
                 let hash = get_file_hash(&path);
                 let tags = meta
                     .get_tag_multiple_strings("Xmp.digiKam.TagsList")
@@ -298,7 +304,7 @@ pub fn load_available_images(dir: PathBuf) -> Vec<ImageData> {
                     path,
                     format,
                     embedded_thumbnail,
-                    orientation,
+                    orientation, // TODO: we might not know the final rotation at this point (such as with videos)
                     hash,
                     rating,
                     tags,
@@ -365,7 +371,7 @@ pub fn load_thumbnail(path: &ImageData) -> ImflowImageBuffer {
     }
     let thumbnail = match path.format {
         ImageFormat::Heif => load_heif(path, true),
-        ImageFormat::Video => load_thumbnail_video(path).unwrap(),
+        ImageFormat::Video => load_thumbnail_video(&path.path).unwrap(),
         _ => load_thumbnail_exif(path).unwrap_or_else(|| load_thumbnail_full(path)),
     };
 
@@ -407,8 +413,8 @@ pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
     }
 }
 
-pub fn load_thumbnail_video(path: &ImageData) -> Option<ImflowImageBuffer> {
-    let mut ictx = ffmpeg::format::input(&path.path).unwrap();
+pub fn load_thumbnail_video(path: &PathBuf) -> Option<ImflowImageBuffer> {
+    let mut ictx = ffmpeg::format::input(&path).unwrap();
     let best_video_stream_index = ictx
         .streams()
         .best(ffmpeg::media::Type::Video)
@@ -432,7 +438,7 @@ pub fn load_thumbnail_video(path: &ImageData) -> Option<ImflowImageBuffer> {
                 let mat_ptr = side_data.data().as_ptr() as *const ffi::__int32_t;
                 let angle = unsafe { ffi::av_display_rotation_get(mat_ptr) } as i64;
                 let angle = ((angle % 360) + 360) % 360;
-                println!("angle: {}", angle);
+                // println!("angle: {}, {:?}", angle, path);
                 orientation = Some(match angle {
                     90 => Orientation::Rotate90,
                     180 => Orientation::Rotate180,
@@ -449,6 +455,7 @@ pub fn load_thumbnail_video(path: &ImageData) -> Option<ImflowImageBuffer> {
             }
         }
     }
+    // println!("orientation: {:?}, {:?}\n", orientation, path);
     let key_frame = decoded_frame.unwrap();
 
     let mut scaler = ffmpeg::software::scaling::context::Context::get(
