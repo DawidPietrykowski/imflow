@@ -1,6 +1,6 @@
 use clap::Parser;
-use std::path::PathBuf;
 use ffmpeg_next as ffmpeg;
+use std::path::PathBuf;
 
 mod app;
 mod egui_tools;

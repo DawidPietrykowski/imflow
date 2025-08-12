@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::str::FromStr;
-use xmp_toolkit::{xmp_ns, XmpMeta};
+use xmp_toolkit::{XmpMeta, xmp_ns};
 
 struct CircularBuffer<T> {
     buffer: Vec<T>,

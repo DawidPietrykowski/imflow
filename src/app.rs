@@ -1,7 +1,8 @@
 use crate::egui_tools::EguiRenderer;
 use egui::load::{ImageLoadResult, ImageLoader};
 use egui::{
-    Align, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Pos2, Sense, TextureOptions, Vec2
+    Align, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Pos2, Sense,
+    TextureOptions, Vec2,
 };
 use egui_wgpu::wgpu::{Limits, SurfaceError};
 use egui_wgpu::{ScreenDescriptor, wgpu};
@@ -41,7 +42,7 @@ pub(crate) struct TransformData {
     height: u32,
     orientation: Orientation,
     zoom_center_x: f32,
-    zoom_center_y: f32
+    zoom_center_y: f32,
 }
 
 #[rustfmt::skip]
@@ -341,10 +342,15 @@ impl AppState {
         let scale_factor = 1.0;
 
         let inner_size = Vec2::new(MAX_IMAGE_SIZE as f32, MAX_IMAGE_SIZE as f32);
-        let (image_texture, bind_group, render_pipeline, transform_buffer) =
-            setup_texture(&device, surface_config.clone(), MAX_IMAGE_SIZE, MAX_IMAGE_SIZE);
+        let (image_texture, bind_group, render_pipeline, transform_buffer) = setup_texture(
+            &device,
+            surface_config.clone(),
+            MAX_IMAGE_SIZE,
+            MAX_IMAGE_SIZE,
+        );
 
-        let (inner_texture, inner_texture_view) = create_inner_render_target(&device, MAX_IMAGE_SIZE, MAX_IMAGE_SIZE);
+        let (inner_texture, inner_texture_view) =
+            create_inner_render_target(&device, MAX_IMAGE_SIZE, MAX_IMAGE_SIZE);
 
         let inner_texture_id = egui_renderer.renderer.register_native_texture(
             &device,
@@ -492,7 +498,10 @@ impl App {
                 state.loaded_thumbnail = true;
                 store.get_thumbnail()
             };
-            println!("updating image: {:?} {:?} {:?}", imbuf.width, imbuf.height, imbuf.orientation);
+            println!(
+                "updating image: {:?} {:?} {:?}",
+                imbuf.width, imbuf.height, imbuf.orientation
+            );
             let width = imbuf.width as u32;
             let height = imbuf.height as u32;
             let buffer_u8 = unsafe {
@@ -554,7 +563,13 @@ impl App {
         } else {
             scale_y = window_aspect_ratio / image_aspect_ratio;
         }
-        let transform = create_transform_matrix(&state.transform_data, scale_x, scale_y, state.transform_data.zoom_center_x, state.transform_data.zoom_center_y);
+        let transform = create_transform_matrix(
+            &state.transform_data,
+            scale_x,
+            scale_y,
+            state.transform_data.zoom_center_x,
+            state.transform_data.zoom_center_y,
+        );
         state.queue.write_buffer(
             &state.transform_buffer,
             0,
@@ -577,7 +592,14 @@ impl App {
         self.update_transform();
     }
 
-    pub fn pan_zoom(&mut self, zoom_delta: f32, pan_x: f32, pan_y: f32, zoom_center_x: f32, zoom_center_y: f32) {
+    pub fn pan_zoom(
+        &mut self,
+        zoom_delta: f32,
+        pan_x: f32,
+        pan_y: f32,
+        zoom_center_x: f32,
+        zoom_center_y: f32,
+    ) {
         let state = self.state.as_mut().unwrap();
 
         state.transform_data.zoom = (state.transform_data.zoom + zoom_delta).clamp(1.0, 20.0);
@@ -904,7 +926,9 @@ impl App {
                         if scroll_delta.y != 0.0 {
                             zoom_delta = Some(scroll_delta.y * 0.001);
                         }
-                        if let Some(latest_pos) = ui.input(|i| i.pointer.latest_pos().map(Pos2::to_vec2)) {
+                        if let Some(latest_pos) =
+                            ui.input(|i| i.pointer.latest_pos().map(Pos2::to_vec2))
+                        {
                             let mut relative_position = latest_pos / image_size.unwrap();
                             relative_position -= Vec2::new(0.5, 0.5);
                             relative_position *= 2.0;
@@ -950,11 +974,27 @@ impl App {
         needs_redraw |= any_movement;
         match (pan_delta, zoom_delta) {
             (None, None) => {}
-            (None, Some(zoom_delta)) => self.pan_zoom(zoom_delta, 0.0, 0.0, cursor_position.unwrap().x, cursor_position.unwrap().y),
-            (Some(pan_delta), None) => self.pan_zoom(0.0, pan_delta.x, pan_delta.y, cursor_position.unwrap().x, cursor_position.unwrap().y),
-            (Some(pan_delta), Some(zoom_delta)) => {
-                self.pan_zoom(zoom_delta, pan_delta.x, pan_delta.y, cursor_position.unwrap().x, cursor_position.unwrap().y)
-            }
+            (None, Some(zoom_delta)) => self.pan_zoom(
+                zoom_delta,
+                0.0,
+                0.0,
+                cursor_position.unwrap().x,
+                cursor_position.unwrap().y,
+            ),
+            (Some(pan_delta), None) => self.pan_zoom(
+                0.0,
+                pan_delta.x,
+                pan_delta.y,
+                cursor_position.unwrap().x,
+                cursor_position.unwrap().y,
+            ),
+            (Some(pan_delta), Some(zoom_delta)) => self.pan_zoom(
+                zoom_delta,
+                pan_delta.x,
+                pan_delta.y,
+                cursor_position.unwrap().x,
+                cursor_position.unwrap().y,
+            ),
         }
         if reset_transform {
             self.reset_transform();
@@ -1011,7 +1051,7 @@ impl ApplicationHandler for App {
                 let mut wants_redraw = self.handle_redraw();
                 println!("handle_redraw returned: {}", wants_redraw);
 
-                let (events, _keys_down, pointer, scroll) = self
+                let (events, _keys_down, _pointer, _scroll) = self
                     .state
                     .as_ref()
                     .unwrap()
@@ -1073,10 +1113,12 @@ impl ApplicationHandler for App {
                                 Key::Num5 => store.set_rating(5),
                                 Key::Escape => exit(0),
                                 Key::Space => {
-                                    if let Err(e) = open::that_detached(store.current_image_path.path.clone()) {
+                                    if let Err(e) =
+                                        open::that_detached(store.current_image_path.path.clone())
+                                    {
                                         println!("Error while opening file: {}", e);
                                     }
-                                },
+                                }
                                 _ => {}
                             }
                         } else if let Event::PointerButton {
