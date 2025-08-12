@@ -1,7 +1,7 @@
 use crate::egui_tools::EguiRenderer;
 use egui::load::{ImageLoadResult, ImageLoader};
 use egui::{
-    Align, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Pos2, Sense,
+    Align, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Pos2, Rect, Sense,
     TextureOptions, Vec2,
 };
 use egui_wgpu::wgpu::{Limits, SurfaceError};
@@ -66,6 +66,21 @@ fn create_transform_matrix(data: &TransformData, scale_x: f32, scale_y: f32, zoo
         0.0,            0.0,            1.0, 0.0,
         tx, ty, 0.0, 1.0,
     ]
+}
+
+#[rustfmt::skip]
+fn get_uv_transform(orientation: Orientation) -> Rect {
+    let ((u0, v0), (u1, v1)) = match orientation {
+        Orientation::NoTransforms => ((0.0, 0.0), (1.0, 1.0)),
+        Orientation::Rotate90 => ((1.0, 0.0), (0.0, 1.0)),
+        Orientation::Rotate180 => ((1.0, 1.0), (0.0, 0.0)),
+        Orientation::Rotate270 => ((0.0, 1.0), (1.0, 0.0)),
+        Orientation::FlipHorizontal => ((1.0, 0.0), (0.0, 1.0)),
+        Orientation::FlipVertical => ((0.0, 1.0), (1.0, 0.0)),
+        Orientation::Rotate90FlipH => ((0.0, 0.0), (1.0, 1.0)),
+        Orientation::Rotate270FlipH => ((1.0, 1.0), (0.0, 0.0)),
+    };
+    Rect::from_min_max(Pos2::new(u0, v0), Pos2::new(u1, v1))
 }
 
 fn create_inner_render_target(
@@ -854,12 +869,15 @@ impl App {
                                         bytes: egui::load::Bytes::Static(&[]),
                                     };
 
-                                    let image_widget = horizontal.add(
-                                        egui::Image::new(source)
-                                            .shrink_to_fit()
-                                            .corner_radius(10)
-                                            .sense(Sense::click()),
-                                    );
+                                    let mut egui_image = egui::Image::new(source)
+                                        .shrink_to_fit()
+                                        .corner_radius(10)
+                                        .sense(Sense::click());
+                                    if !image.embedded_thumbnail {
+                                        egui_image =
+                                            egui_image.uv(get_uv_transform(image.orientation));
+                                    }
+                                    let image_widget = horizontal.add(egui_image);
                                     if changed_image && current_image == image {
                                         image_widget.scroll_to_me(Some(Align::Center));
                                     }

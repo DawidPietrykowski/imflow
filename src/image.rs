@@ -400,7 +400,7 @@ pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
             width,
             height,
             rgba_buffer,
-            orientation,
+            orientation: Orientation::NoTransforms,
         })
     } else {
         None
