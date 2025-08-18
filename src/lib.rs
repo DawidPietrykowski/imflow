@@ -2,3 +2,4 @@
 pub mod image;
 pub mod store;
 pub mod xmp;
+mod utils;

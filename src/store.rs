@@ -2,10 +2,13 @@ use crate::image::{ImageData, ImageFormat, load_thumbnail};
 use crate::image::{ImflowImageBuffer, load_available_images, load_image};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use exiftool::ExifTool;
+use log::{debug, info};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Display;
+use std::io;
 use std::path::PathBuf;
 use std::time::Instant;
 use threadpool::ThreadPool;
@@ -37,7 +40,6 @@ impl Default for FileFilters {
         formats.insert(ImageFormat::Jpg, true);
         formats.insert(ImageFormat::Jxl, true);
         formats.insert(ImageFormat::Heif, true);
-        // TODO: Refactor such that it's not possible to miss an enum
         formats.insert(ImageFormat::Video, true);
         let mut tags = HashMap::new();
         tags.insert(EDIT_TAG.to_string(), false);
@@ -54,14 +56,15 @@ impl Default for FileFilters {
 impl FileFilters {
     fn filter_image(&self, image: &ImageData) -> bool {
         self.rating[image.rating.clamp(0, 5) as usize]
-            && self.file_format[&image.format]
+            && *self.file_format.get(&image.format).unwrap_or(&true)
             && image
                 .path
                 .file_name()
                 .unwrap()
                 .to_str()
                 .unwrap()
-                .contains(&self.name)
+                .to_lowercase()
+                .contains(&self.name.to_lowercase())
             && (!self.tags.iter().any(|f| *f.1)
                 || self
                     .tags
@@ -86,10 +89,32 @@ pub struct ImageStore {
     previous_id: Option<usize>,
 }
 
+#[derive(Debug)]
+pub enum ImageStoreCreationError {
+    FailedReadingFiles(io::Error),
+}
+
+impl Display for ImageStoreCreationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{:?}", self))
+    }
+}
+
+impl From<io::Error> for ImageStoreCreationError {
+    fn from(error: io::Error) -> Self {
+        ImageStoreCreationError::FailedReadingFiles(error)
+    }
+}
+
+impl std::error::Error for ImageStoreCreationError {}
+
 impl ImageStore {
-    pub fn new(path: PathBuf) -> Self {
+    pub fn new(path: PathBuf) -> Result<Self, ImageStoreCreationError> {
         let current_image_id: usize = 0;
-        let available_images = load_available_images(path);
+        let available_images = load_available_images(path)?;
+        if available_images.len() == 0 {
+            panic!("No media files found");
+        }
         let new_path = available_images[0].clone();
 
         let (loader_tx, loader_rx) = unbounded();
@@ -98,21 +123,13 @@ impl ImageStore {
 
         let currently_loading = HashSet::new();
 
-        // let first_image_path = available_images[0].clone();
-        // let first_image_thread = std::thread::spawn(move || {
-        //     let image = load_image(&first_image_path);
-        //     (first_image_path, image)
-        // });
-
         let total_start = Instant::now();
         let (sender, receiver) = unbounded();
         available_images
             .par_iter()
             .for_each_with(sender, |s, path| {
-                // if path.embedded_thumbnail {
                 let buf = load_thumbnail(path);
                 s.send((path.clone(), buf)).unwrap();
-                // }
             });
 
         let mut loaded_images: FxHashMap<ImageData, ImflowImageBuffer> = FxHashMap::default();
@@ -126,14 +143,13 @@ impl ImageStore {
         load_times.reserve(available_images.len());
 
         let total_time = total_start.elapsed();
-        println!(
+        debug!(
             "all thumbnails load time: {:?} for {}",
             total_time,
             loaded_thumbnails.len()
         );
 
-        let image = load_image(&new_path.clone());
-        // let (path, image) = first_image_thread.join().unwrap();
+        let image = load_image(&new_path.clone()).unwrap();
         loaded_images.insert(new_path.clone(), image);
         let mut state = Self {
             current_image_id,
@@ -152,14 +168,37 @@ impl ImageStore {
 
         state.preload_next_images(PRELOAD_NEXT_IMAGE_N, None);
 
-        state
+        Ok(state)
+    }
+
+    pub fn generate_file_filters(&self) -> FileFilters {
+        let mut formats = HashMap::new();
+        let mut tags = HashMap::new();
+        tags.insert(EDIT_TAG.to_string(), false);
+        tags.insert(CROP_TAG.to_string(), false);
+        for (image_data, _) in &self.loaded_images_thumbnails {
+            if !formats.contains_key(&image_data.format) {
+                formats.insert(image_data.format.clone(), true);
+            }
+            for tag in &image_data.tags {
+                if !tags.contains_key(tag) {
+                    tags.insert(tag.clone(), false);
+                }
+            }
+        }
+        FileFilters {
+            rating: [true; 6],
+            name: "".to_string(),
+            file_format: formats,
+            tags,
+        }
     }
 
     pub fn set_rating(&mut self, rating: i32) {
         let current_image = &mut self.available_images[self.current_image_id];
         let path = current_image.path.clone();
 
-        // println!("Writing {} to {:?}", rating, path);
+        info!("Writing {} to {:?}", rating, path);
         let mut exiftool = ExifTool::new().unwrap();
         exiftool
             .write_tag(path.as_path(), "Rating", rating, &["-overwrite_original"])
@@ -240,7 +279,7 @@ impl ImageStore {
         self.currently_loading.insert(path.clone());
 
         self.pool.execute(move || {
-            let image = load_image(&path.clone());
+            let image = load_image(&path.clone()).unwrap();
             let _ = tx.send((path, image));
         });
     }
@@ -266,7 +305,6 @@ impl ImageStore {
                 return None;
             }
             if let Some(filter) = &filter {
-                // println("matching on filter");
                 if filter.filter_image(&self.available_images[next_id as usize]) {
                     break;
                 }
@@ -359,7 +397,7 @@ impl ImageStore {
     fn evict_images(&mut self, count: usize) {
         for _ in 0..count {
             if let Some(loaded_image) = self.load_times.pop_back() {
-                println!("Cache eviction: {:?}", loaded_image.path);
+                debug!("Cache eviction: {:?}", loaded_image.path);
                 let _ = self.loaded_images.remove(&loaded_image);
             }
         }

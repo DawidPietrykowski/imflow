@@ -9,6 +9,8 @@ use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::metadata::Orientation;
 use imflow::image::{ImageData, swap_wh};
 use imflow::store::{CROP_TAG, EDIT_TAG, FileFilters, ImageStore, TagAction};
+use itertools::Itertools;
+use log::{debug, info};
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::path::PathBuf;
@@ -278,7 +280,7 @@ pub struct AppState {
     pub render_pipeline: wgpu::RenderPipeline,
     pub transform_buffer: wgpu::Buffer,
     pub transform_data: TransformData,
-    pub filters: FileFilters,
+    pub file_filters: FileFilters,
     pub selected_image: ImageData,
     pub loaded_thumbnail: bool,
     inner_texture: wgpu::Texture,
@@ -345,7 +347,9 @@ impl AppState {
 
         let mut egui_renderer = EguiRenderer::new(&device, surface_config.format, None, 1, window);
 
-        let image_store = ImageStore::new(path);
+        let image_store = ImageStore::new(path).expect("Failed loading images");
+
+        let file_filters = image_store.generate_file_filters();
 
         // TODO: verify
         let selected_image = image_store.current_image_path.clone();
@@ -398,7 +402,7 @@ impl AppState {
             render_pipeline,
             transform_buffer,
             transform_data,
-            filters: FileFilters::default(),
+            file_filters,
             selected_image,
             loaded_thumbnail: false,
             inner_texture,
@@ -415,7 +419,7 @@ impl AppState {
     }
 
     pub fn recreate_texture(&mut self) {
-        println!("recreating texture");
+        debug!("recreating texture");
         (self.inner_texture, self.inner_texture_view) = create_inner_render_target(
             &self.device,
             self.inner_size.x as u32,
@@ -514,7 +518,7 @@ impl App {
                 state.loaded_thumbnail = true;
                 store.get_thumbnail()
             };
-            println!(
+            debug!(
                 "updating image: {:?} {:?} {:?}",
                 imbuf.width, imbuf.height, imbuf.orientation
             );
@@ -628,14 +632,13 @@ impl App {
     }
 
     fn handle_redraw(&mut self) -> bool {
-        // println!("handle_redraw->can_render: {}", self.is_visible());
         if !self.is_visible() {
             return false;
         }
         if let Some(window) = self.window.as_ref() {
             if let Some(min) = window.is_minimized() {
                 if min {
-                    println!("Window is minimized");
+                    debug!("Window is minimized");
                     return false;
                 }
             }
@@ -655,11 +658,11 @@ impl App {
 
         let surface_texture = match surface_texture {
             Err(SurfaceError::Outdated) => {
-                println!("wgpu surface outdated");
+                debug!("wgpu surface outdated");
                 return false;
             }
             Err(SurfaceError::Timeout) => {
-                println!("wgpu surface timeout");
+                debug!("wgpu surface timeout");
                 return false;
             }
             Err(_) => {
@@ -799,11 +802,11 @@ impl App {
             // current_id = store.current_image_id;
             // image_count = store.available_images.len();
             current_image = store.current_image_path.clone();
-            filtered_images = store.get_filtered_images(&state.filters);
+            filtered_images = store.get_filtered_images(&state.file_filters);
             changed_image = store.image_changed.clone();
             filename = path.path.file_name().unwrap();
             window = self.window.as_ref().unwrap();
-            rating_filter = state.filters.rating;
+            rating_filter = state.file_filters.rating;
             tags = path.tags;
         }
         {
@@ -903,23 +906,23 @@ impl App {
                 });
 
             egui::SidePanel::right("Filters").show(state.egui_renderer.context(), |ui| {
-                for (i, mut rating) in state.filters.rating.iter_mut().enumerate().rev() {
+                for (i, mut rating) in state.file_filters.rating.iter_mut().enumerate().rev() {
                     ui.checkbox(&mut rating, format!("{} stars", i));
                 }
 
                 ui.separator();
 
-                ui.text_edit_singleline(&mut state.filters.name);
+                ui.text_edit_singleline(&mut state.file_filters.name);
 
                 ui.separator();
 
-                for (format, mut value) in state.filters.file_format.iter_mut() {
+                for (format, mut value) in state.file_filters.file_format.iter_mut().sorted_by(|(a, _), (b, _)| Ord::cmp(&format!("{}", a), &format!("{}", b))) {
                     ui.checkbox(&mut value, format!("{}", format));
                 }
 
                 ui.separator();
 
-                for (tag, mut value) in state.filters.tags.iter_mut() {
+                for (tag, mut value) in state.file_filters.tags.iter_mut() {
                     ui.checkbox(&mut value, format!("{}", tag));
                 }
             });
@@ -972,7 +975,7 @@ impl App {
             if let Ok(mut store) = state.store.write() {
                 store.image_changed = false;
                 if let Some(selected_image) = selected_image {
-                    store.select_image(selected_image, Some(&state.filters));
+                    store.select_image(selected_image, Some(&state.file_filters));
                 }
             }
 
@@ -1071,7 +1074,7 @@ impl ApplicationHandler for App {
 
         match event {
             WindowEvent::CloseRequested => {
-                println!("The close button was pressed; stopping");
+                info!("The close button was pressed; stopping");
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
@@ -1079,7 +1082,6 @@ impl ApplicationHandler for App {
                     return;
                 }
                 let mut wants_redraw = self.handle_redraw();
-                // println!("handle_redraw returned: {}", wants_redraw);
 
                 let (events, _keys_down, _pointer, _scroll) = self
                     .state
@@ -1100,10 +1102,16 @@ impl ApplicationHandler for App {
                 let mut reset_transform = false;
                 {
                     let state = self.state.as_mut().unwrap();
-                    let filters = state.filters.clone();
+                    let filters = state.file_filters.clone();
                     let mut store = state.store.write().unwrap();
                     events.iter().for_each(|e| {
-                        if let Event::Key { key, pressed, .. } = e {
+                        if let Event::Key {
+                            key,
+                            pressed,
+                            repeat,
+                            ..
+                        } = e
+                        {
                             if !*pressed {
                                 return;
                             }
@@ -1120,6 +1128,13 @@ impl ApplicationHandler for App {
                                     store.last_image(Some(&filters));
                                     updated_image = true;
                                 }
+                                _ => {}
+                            }
+                            // Ignore repeated keystrokes for the following actions
+                            if *repeat {
+                                return;
+                            }
+                            match *key {
                                 Key::ArrowUp => {
                                     let rating = store.get_current_rating();
                                     store.set_rating(rating + 1);
@@ -1146,7 +1161,7 @@ impl ApplicationHandler for App {
                                     if let Err(e) =
                                         open::that_detached(store.current_image_path.path.clone())
                                     {
-                                        println!("Error while opening file: {}", e);
+                                        log::error!("Error while opening file: {}", e);
                                     }
                                 }
                                 _ => {}
@@ -1164,15 +1179,13 @@ impl ApplicationHandler for App {
                 if updated_image {
                     self.update_texture(false);
                 }
-                // println!("wants: {}", wants_redraw);
                 wants_redraw |= updated_image;
+
                 if reset_transform {
                     self.reset_transform();
                 }
-                // println!("wants: {}", wants_redraw);
                 wants_redraw |= reset_transform;
 
-                // println!("wants: {}", wants_redraw);
                 wants_redraw |= self
                     .state
                     .as_ref()
@@ -1181,7 +1194,6 @@ impl ApplicationHandler for App {
                     .context()
                     .has_requested_repaint();
 
-                // println!("wants: {}\n", wants_redraw);
                 if wants_redraw {
                     self.window.as_ref().unwrap().request_redraw();
                 }
@@ -1222,38 +1234,31 @@ impl ImageLoader for ImflowEguiLoader {
     ) -> egui::load::ImageLoadResult {
         let mut cache = self.cache.lock();
 
-        // let id = uri.parse::<usize>().unwrap();
         let id = uri.to_string();
         if let Some(handle) = cache.get(&id) {
-            handle.clone()
-        } else {
-            let imbuf = {
-                let binding = self.store.read().unwrap();
-                binding.get_thumbnail_hash(id.clone()).clone()
-            };
-            let mut image = ColorImage::new([imbuf.width, imbuf.height], Color32::BLACK);
-            let image_buffer = image.as_raw_mut();
-            // println!(
-            //     "w: {} h: {} len: {}",
-            //     imbuf.width,
-            //     imbuf.height,
-            //     imbuf.rgba_buffer.len()
-            // );
-            for (i, &value) in imbuf.rgba_buffer.iter().enumerate() {
-                let bytes = value.to_le_bytes();
-                let start = i * 4;
-                image_buffer[start..start + 4].copy_from_slice(&bytes);
-            }
-
-            let res = ImageLoadResult::Ok(egui::load::ImagePoll::Ready {
-                image: Arc::new(ColorImage {
-                    size: [imbuf.width, imbuf.height],
-                    pixels: image.pixels,
-                }),
-            });
-            cache.insert(id, res.clone());
-            res.clone()
+            return handle.clone();
         }
+
+        let imbuf = {
+            let binding = self.store.read().unwrap();
+            binding.get_thumbnail_hash(id.clone()).clone()
+        };
+        let mut image = ColorImage::new([imbuf.width, imbuf.height], Color32::BLACK);
+        let image_buffer = image.as_raw_mut();
+        for (i, &value) in imbuf.rgba_buffer.iter().enumerate() {
+            let bytes = value.to_le_bytes();
+            let start = i * 4;
+            image_buffer[start..start + 4].copy_from_slice(&bytes);
+        }
+
+        let res = ImageLoadResult::Ok(egui::load::ImagePoll::Ready {
+            image: Arc::new(ColorImage {
+                size: [imbuf.width, imbuf.height],
+                pixels: image.pixels,
+            }),
+        });
+        cache.insert(id, res.clone());
+        res.clone()
     }
 
     // TODO

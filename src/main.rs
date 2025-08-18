@@ -1,6 +1,6 @@
 use clap::Parser;
 use ffmpeg_next as ffmpeg;
-use std::path::PathBuf;
+use std::{env, path::PathBuf};
 
 mod app;
 mod egui_tools;
@@ -8,6 +8,10 @@ mod egui_tools;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() {
+    if env::var("RUST_LOG").is_err() {
+        unsafe { env::set_var("RUST_LOG", "info") }
+    }
+    env_logger::init();
     rexiv2::initialize().expect("Unable to initialize rexiv2");
     ffmpeg::init().unwrap();
     ffmpeg::log::set_level(ffmpeg_next::log::Level::Quiet);
