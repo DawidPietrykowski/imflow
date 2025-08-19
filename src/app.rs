@@ -27,6 +27,15 @@ use winit::window::{Window, WindowId};
 
 pub const MAX_IMAGE_SIZE: u32 = 8192 * 2;
 
+#[derive(Debug, Default)]
+struct UiInteraction {
+    pan_delta: Option<egui::Vec2>,
+    zoom_delta: Option<f32>,
+    cursor_position: Option<egui::Vec2>,
+    reset_transform: bool,
+    new_image_size: Option<egui::Vec2>,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Transforms {
@@ -283,6 +292,7 @@ pub struct AppState {
     pub file_filters: FileFilters,
     pub selected_image: ImageData,
     pub loaded_thumbnail: bool,
+    current_image: Option<ImageData>,
     inner_texture: wgpu::Texture,
     inner_texture_view: wgpu::TextureView,
     inner_texture_id: egui::TextureId,
@@ -309,8 +319,10 @@ impl AppState {
             .expect("Failed to find an appropriate adapter");
 
         let features = wgpu::Features::empty();
-        let mut limits = Limits::default();
-        limits.max_texture_dimension_2d = 8192 * 2;
+        let limits = Limits {
+            max_texture_dimension_2d: 8192 * 2,
+            ..Default::default()
+        };
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -409,6 +421,7 @@ impl AppState {
             inner_texture_view,
             inner_texture_id,
             inner_size,
+            current_image: None,
         }
     }
 
@@ -471,7 +484,7 @@ impl App {
         let surface = self
             .instance
             .create_surface(window.clone())
-            .expect("Failed to create surface!");
+            .expect("Failed to create surface");
 
         let state = AppState::new(
             &self.instance,
@@ -483,8 +496,8 @@ impl App {
         )
         .await;
 
-        self.window.get_or_insert(window);
-        self.state.get_or_insert(state);
+        let _ = self.window.insert(window);
+        let _ = self.state.insert(state);
 
         self.reset_transform();
         self.update_texture(true);
@@ -564,10 +577,6 @@ impl App {
     fn update_transform(&mut self) {
         let state = self.state.as_mut().unwrap();
 
-        // TODO: Remove obviously
-        // if state.transform_data.width < 800 {
-        //     state.transform_data.orientation = Orientation::NoTransforms;
-        // }
         let (width, height) = swap_wh(
             state.transform_data.width,
             state.transform_data.height,
@@ -635,24 +644,45 @@ impl App {
         if !self.is_visible() {
             return false;
         }
-        if let Some(window) = self.window.as_ref() {
-            if let Some(min) = window.is_minimized() {
-                if min {
-                    debug!("Window is minimized");
-                    return false;
-                }
-            }
-        }
 
         let mut needs_redraw = false;
 
         let state = self.state.as_mut().unwrap();
 
-        let screen_descriptor = ScreenDescriptor {
-            size_in_pixels: [state.surface_config.width, state.surface_config.height],
-            pixels_per_point: self.window.as_ref().unwrap().scale_factor() as f32
-                * state.scale_factor,
-        };
+        let texture_view = &state.inner_texture_view;
+        let pipeline = &state.render_pipeline;
+        let bind_group = &state.bind_group;
+
+        let mut encoder = state
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+        clear_texture_command(&mut encoder, texture_view);
+        draw_command(
+            &state.device,
+            &mut encoder,
+            texture_view,
+            pipeline,
+            bind_group,
+        );
+
+        let window = self.window.as_ref().unwrap();
+
+        let filtered_images;
+        let current_image;
+        let selected_image = None;
+        {
+            let store = state.store.read().unwrap();
+            current_image = store.current_image_path.clone();
+            filtered_images = store.get_filtered_images(&state.file_filters);
+        }
+        let interaction = draw_ui(
+            state,
+            window,
+            filtered_images,
+            current_image,
+            selected_image,
+        );
 
         let surface_texture = state.surface.get_current_texture();
 
@@ -676,323 +706,25 @@ impl App {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = state
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let screen_descriptor = ScreenDescriptor {
+            size_in_pixels: [state.surface_config.width, state.surface_config.height],
+            pixels_per_point: self.window.as_ref().unwrap().scale_factor() as f32
+                * state.scale_factor,
+        };
 
-        // Clear buffer with black
-        {
-            let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &state.inner_texture_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-        }
-
-        {
-            #[repr(C)]
-            #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-            struct Vertex {
-                position: [f32; 3],
-                tex_coords: [f32; 2],
-            }
-
-            // Quad (two triangles)
-            let vertices = [
-                // Position (x, y, z),   Texture coords (u, v)
-                Vertex {
-                    position: [-1.0, -1.0, 0.0],
-                    tex_coords: [0.0, 1.0],
-                }, // bottom left
-                Vertex {
-                    position: [-1.0, 1.0, 0.0],
-                    tex_coords: [0.0, 0.0],
-                }, // top left
-                Vertex {
-                    position: [1.0, -1.0, 0.0],
-                    tex_coords: [1.0, 1.0],
-                }, // bottom right
-                Vertex {
-                    position: [1.0, 1.0, 0.0],
-                    tex_coords: [1.0, 0.0],
-                }, // top right
-            ];
-
-            let indices: [u16; 6] = [0, 1, 2, 2, 1, 3];
-
-            let vertex_buffer =
-                state
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Vertex Buffer"),
-                        contents: bytemuck::cast_slice(&vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-
-            let index_buffer = state
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Index Buffer"),
-                    contents: bytemuck::cast_slice(&indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                });
-
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Texture Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &state.inner_texture_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            render_pass.set_pipeline(&state.render_pipeline);
-            render_pass.set_bind_group(0, &state.bind_group, &[]);
-
-            // Bind the vertex buffer
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-
-            // Draw using the index buffer
-            render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..6, 0, 0..1);
-        }
-        let mut pan_delta = None;
-        let mut zoom_delta = None;
-        let mut cursor_position = None;
-        let mut reset_transform = false;
-        let mut image_size = None;
-
-        // let mut file_filters;
-        let rating;
-        let path;
-        // let current_id;
-        // let image_count;
-        let filename;
-        let window;
-        let filtered_images;
-        let current_image;
-        let changed_image;
-        let rating_filter;
-        let tags;
-        let mut selected_image = None;
-        {
-            let store = state.store.read().unwrap();
-            rating = store.get_current_rating();
-            path = store.current_image_path.clone();
-            // current_id = store.current_image_id;
-            // image_count = store.available_images.len();
-            current_image = store.current_image_path.clone();
-            filtered_images = store.get_filtered_images(&state.file_filters);
-            changed_image = store.image_changed.clone();
-            filename = path.path.file_name().unwrap();
-            window = self.window.as_ref().unwrap();
-            rating_filter = state.file_filters.rating;
-            tags = path.tags;
-        }
-        {
-            state.egui_renderer.begin_frame(window);
-
-            egui::Window::new("Rating")
-                .collapsible(false)
-                .resizable(false)
-                .default_width(5.0)
-                .show(state.egui_renderer.context(), |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!("{}", rating))
-                                .size(42.0)
-                                .strong(),
-                        );
-                        ui.label(
-                            egui::RichText::new(format!("{}", filename.to_str().unwrap()))
-                                .size(10.0)
-                                .strong(),
-                        );
-                    });
-                });
-
-            if tags.contains(&EDIT_TAG.to_string()) {
-                egui::Window::new("EDIT")
-                    .collapsible(false)
-                    .resizable(false)
-                    .default_width(10.0)
-                    .title_bar(false)
-                    .show(state.egui_renderer.context(), |ui| {
-                        ui.label(egui::RichText::new("EDIT").monospace().size(32.0).strong());
-                    });
-            }
-            if tags.contains(&CROP_TAG.to_string()) {
-                egui::Window::new("CROP")
-                    .collapsible(false)
-                    .resizable(false)
-                    .default_width(10.0)
-                    .title_bar(false)
-                    .show(state.egui_renderer.context(), |ui| {
-                        ui.label(egui::RichText::new("CROP").monospace().size(32.0).strong());
-                    });
-            }
-
-            egui::TopBottomPanel::bottom("Thumbnails")
-                .default_height(120.0)
-                .resizable(true)
-                .show(state.egui_renderer.context(), |panel_ui| {
-                    egui::ScrollArea::horizontal()
-                        .max_width(f32::INFINITY)
-                        .show(panel_ui, |ui| {
-                            ui.set_max_width(f32::INFINITY);
-                            ui.horizontal_centered(|horizontal| {
-                                for image in filtered_images {
-                                    if image.rating >= 0
-                                        && image.rating < 6
-                                        && !rating_filter[image.rating as usize]
-                                    {
-                                        continue;
-                                    }
-                                    let source = ImageSource::Bytes {
-                                        uri: std::borrow::Cow::Owned(image.get_hash_str()),
-                                        bytes: egui::load::Bytes::Static(&[]),
-                                    };
-
-                                    let mut egui_image = egui::Image::new(source)
-                                        .shrink_to_fit()
-                                        .corner_radius(10)
-                                        .sense(Sense::click());
-                                    if !image.embedded_thumbnail {
-                                        if [
-                                            Orientation::Rotate90,
-                                            Orientation::Rotate270,
-                                            Orientation::Rotate90FlipH,
-                                            Orientation::Rotate270FlipH,
-                                        ]
-                                        .contains(&image.orientation)
-                                        {
-                                            egui_image =
-                                                egui_image.rotate(PI / 2.0, Vec2::splat(0.5));
-                                        } else {
-                                            egui_image =
-                                                egui_image.uv(get_uv_transform(image.orientation));
-                                        }
-                                    }
-                                    let image_widget = horizontal.add(egui_image);
-                                    if changed_image && current_image == image {
-                                        image_widget.scroll_to_me(Some(Align::Center));
-                                    }
-                                    if image_widget.clicked() {
-                                        selected_image = Some(image);
-                                    }
-                                }
-                            });
-                        });
-                });
-
-            egui::SidePanel::right("Filters").show(state.egui_renderer.context(), |ui| {
-                for (i, mut rating) in state.file_filters.rating.iter_mut().enumerate().rev() {
-                    ui.checkbox(&mut rating, format!("{} stars", i));
-                }
-
-                ui.separator();
-
-                ui.text_edit_singleline(&mut state.file_filters.name);
-
-                ui.separator();
-
-                for (format, mut value) in state.file_filters.file_format.iter_mut().sorted_by(|(a, _), (b, _)| Ord::cmp(&format!("{}", a), &format!("{}", b))) {
-                    ui.checkbox(&mut value, format!("{}", format));
-                }
-
-                ui.separator();
-
-                for (tag, mut value) in state.file_filters.tags.iter_mut() {
-                    ui.checkbox(&mut value, format!("{}", tag));
-                }
-            });
-
-            egui::CentralPanel::default().show(state.egui_renderer.context(), |ui| {
-                let available_size = ui.available_size();
-                ui.centered_and_justified(|ui| {
-                    let image_response = ui.add(
-                        Image::new((
-                            state.inner_texture_id,
-                            Vec2::new(
-                                state.inner_texture.size().width as f32,
-                                state.inner_texture.size().height as f32,
-                            ),
-                        ))
-                        .texture_options(TextureOptions::LINEAR)
-                        .maintain_aspect_ratio(true)
-                        .fit_to_exact_size(available_size)
-                        .sense(Sense::click_and_drag()),
-                    );
-
-                    image_size = Some(available_size);
-
-                    if image_response.dragged() {
-                        pan_delta = Some(image_response.drag_delta() / image_size.unwrap());
-                    }
-
-                    if image_response.clicked_by(egui::PointerButton::Secondary) {
-                        reset_transform = true;
-                    }
-
-                    if image_response.hovered() {
-                        let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
-                        if scroll_delta.y != 0.0 {
-                            zoom_delta = Some(scroll_delta.y * 0.001);
-                        }
-                        if let Some(latest_pos) =
-                            ui.input(|i| i.pointer.latest_pos().map(Pos2::to_vec2))
-                        {
-                            let mut relative_position = latest_pos / image_size.unwrap();
-                            relative_position -= Vec2::new(0.5, 0.5);
-                            relative_position *= 2.0;
-                            relative_position.y *= -1.0;
-                            cursor_position = Some(relative_position);
-                        }
-                    }
-                });
-            });
-
-            if let Ok(mut store) = state.store.write() {
-                store.image_changed = false;
-                if let Some(selected_image) = selected_image {
-                    store.select_image(selected_image, Some(&state.file_filters));
-                }
-            }
-
-            state.egui_renderer.end_frame_and_draw(
-                &state.device,
-                &state.queue,
-                &mut encoder,
-                window,
-                &surface_view,
-                screen_descriptor,
-            );
-        }
+        state.egui_renderer.end_frame_and_draw(
+            &state.device,
+            &state.queue,
+            &mut encoder,
+            window,
+            &surface_view,
+            screen_descriptor,
+        );
 
         state.queue.submit(Some(encoder.finish()));
         surface_texture.present();
 
-        if let Some(image_size) = image_size {
+        if let Some(image_size) = interaction.new_image_size {
             if image_size != state.inner_size && image_size.min_elem() >= 10.0 {
                 state.inner_size = image_size;
                 state.recreate_texture();
@@ -1000,36 +732,27 @@ impl App {
                 needs_redraw = true;
             }
         }
-        let any_movement = match (pan_delta, zoom_delta) {
-            (None, None) => false,
-            _ => true,
-        };
-        needs_redraw |= any_movement;
-        match (pan_delta, zoom_delta) {
-            (None, None) => {}
-            (None, Some(zoom_delta)) => self.pan_zoom(
-                zoom_delta,
-                0.0,
-                0.0,
-                cursor_position.unwrap().x,
-                cursor_position.unwrap().y,
-            ),
-            (Some(pan_delta), None) => self.pan_zoom(
-                0.0,
-                pan_delta.x,
-                pan_delta.y,
-                cursor_position.unwrap().x,
-                cursor_position.unwrap().y,
-            ),
-            (Some(pan_delta), Some(zoom_delta)) => self.pan_zoom(
+
+        let has_pan = interaction.pan_delta.is_some();
+        let has_zoom = interaction.zoom_delta.is_some();
+        let has_cursor = interaction.cursor_position.is_some();
+        if (has_pan || has_zoom) && has_cursor {
+            needs_redraw = true;
+
+            let pan_delta = interaction.pan_delta.unwrap_or_default();
+            let zoom_delta = interaction.zoom_delta.unwrap_or(0.0);
+            let cursor_pos = interaction.cursor_position.unwrap();
+
+            self.pan_zoom(
                 zoom_delta,
                 pan_delta.x,
                 pan_delta.y,
-                cursor_position.unwrap().x,
-                cursor_position.unwrap().y,
-            ),
+                cursor_pos.x,
+                cursor_pos.y,
+            );
         }
-        if reset_transform {
+
+        if interaction.reset_transform {
             self.reset_transform();
             needs_redraw = true;
         }
@@ -1039,6 +762,287 @@ impl App {
         }
         needs_redraw
     }
+}
+
+fn draw_command(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    texture_view: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+) {
+    #[repr(C)]
+    #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+    struct Vertex {
+        position: [f32; 3],
+        tex_coords: [f32; 2],
+    }
+    // Quad (two triangles)
+    let vertices = [
+        // Position (x, y, z),   Texture coords (u, v)
+        Vertex {
+            position: [-1.0, -1.0, 0.0],
+            tex_coords: [0.0, 1.0],
+        }, // bottom left
+        Vertex {
+            position: [-1.0, 1.0, 0.0],
+            tex_coords: [0.0, 0.0],
+        }, // top left
+        Vertex {
+            position: [1.0, -1.0, 0.0],
+            tex_coords: [1.0, 1.0],
+        }, // bottom right
+        Vertex {
+            position: [1.0, 1.0, 0.0],
+            tex_coords: [1.0, 0.0],
+        }, // top right
+    ];
+    let indices: [u16; 6] = [0, 1, 2, 2, 1, 3];
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Vertex Buffer"),
+        contents: bytemuck::cast_slice(&vertices),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Index Buffer"),
+        contents: bytemuck::cast_slice(&indices),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Texture Render Pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: texture_view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    });
+    render_pass.set_pipeline(pipeline);
+    render_pass.set_bind_group(0, bind_group, &[]);
+    // Bind the vertex buffer
+    render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+    // Draw using the index buffer
+    render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+    render_pass.draw_indexed(0..6, 0, 0..1);
+}
+
+fn clear_texture_command(encoder: &mut wgpu::CommandEncoder, texture_view: &wgpu::TextureView) {
+    // Clear buffer with black
+    {
+        let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &texture_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+    }
+}
+
+fn draw_ui(
+    state: &mut AppState,
+    window: &Arc<Window>,
+    filtered_images: Vec<ImageData>,
+    current_image: ImageData,
+    mut selected_image: Option<ImageData>,
+) -> UiInteraction {
+    let mut interaction = UiInteraction::default();
+    let changed_image = state
+        .current_image
+        .as_ref()
+        .map(|i| i != &current_image)
+        .unwrap_or(false);
+    state.current_image = Some(current_image.clone());
+    state.egui_renderer.begin_frame(window);
+
+    egui::Window::new("Rating")
+        .collapsible(false)
+        .resizable(false)
+        .default_width(5.0)
+        .show(state.egui_renderer.context(), |ui| {
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("{}", current_image.rating))
+                        .size(42.0)
+                        .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}",
+                        current_image.path.file_name().unwrap().to_str().unwrap()
+                    ))
+                    .size(10.0)
+                    .strong(),
+                );
+            });
+        });
+
+    if current_image.tags.contains(&EDIT_TAG.to_string()) {
+        egui::Window::new("EDIT")
+            .collapsible(false)
+            .resizable(false)
+            .default_width(10.0)
+            .title_bar(false)
+            .show(state.egui_renderer.context(), |ui| {
+                ui.label(egui::RichText::new("EDIT").monospace().size(32.0).strong());
+            });
+    }
+    if current_image.tags.contains(&CROP_TAG.to_string()) {
+        egui::Window::new("CROP")
+            .collapsible(false)
+            .resizable(false)
+            .default_width(10.0)
+            .title_bar(false)
+            .show(state.egui_renderer.context(), |ui| {
+                ui.label(egui::RichText::new("CROP").monospace().size(32.0).strong());
+            });
+    }
+
+    egui::TopBottomPanel::bottom("Thumbnails")
+        .default_height(120.0)
+        .resizable(true)
+        .show(state.egui_renderer.context(), |panel_ui| {
+            egui::ScrollArea::horizontal()
+                .max_width(f32::INFINITY)
+                .show(panel_ui, |ui| {
+                    ui.set_max_width(f32::INFINITY);
+                    ui.horizontal_centered(|horizontal| {
+                        for image in filtered_images {
+                            if image.rating >= 0
+                                && image.rating < 6
+                                && !state.file_filters.rating[image.rating as usize]
+                            {
+                                continue;
+                            }
+                            let source = ImageSource::Bytes {
+                                uri: std::borrow::Cow::Owned(image.get_hash_str()),
+                                bytes: egui::load::Bytes::Static(&[]),
+                            };
+
+                            let mut egui_image = egui::Image::new(source)
+                                .shrink_to_fit()
+                                .corner_radius(10)
+                                .sense(Sense::click());
+                            if !image.embedded_thumbnail {
+                                if [
+                                    Orientation::Rotate90,
+                                    Orientation::Rotate270,
+                                    Orientation::Rotate90FlipH,
+                                    Orientation::Rotate270FlipH,
+                                ]
+                                .contains(&image.orientation)
+                                {
+                                    egui_image = egui_image.rotate(PI / 2.0, Vec2::splat(0.5));
+                                } else {
+                                    egui_image = egui_image.uv(get_uv_transform(image.orientation));
+                                }
+                            }
+                            let image_widget = horizontal.add(egui_image);
+                            if changed_image && current_image == image {
+                                image_widget.scroll_to_me(Some(Align::Center));
+                            }
+                            if image_widget.clicked() {
+                                selected_image = Some(image);
+                            }
+                        }
+                    });
+                });
+        });
+
+    egui::SidePanel::right("Filters").show(state.egui_renderer.context(), |ui| {
+        for (i, mut rating) in state.file_filters.rating.iter_mut().enumerate().rev() {
+            ui.checkbox(&mut rating, format!("{} stars", i));
+        }
+
+        ui.separator();
+
+        ui.text_edit_singleline(&mut state.file_filters.name);
+
+        ui.separator();
+
+        for (format, mut value) in state
+            .file_filters
+            .file_format
+            .iter_mut()
+            .sorted_by(|(a, _), (b, _)| Ord::cmp(&format!("{}", a), &format!("{}", b)))
+        {
+            ui.checkbox(&mut value, format!("{}", format));
+        }
+
+        ui.separator();
+
+        for (tag, mut value) in state.file_filters.tags.iter_mut() {
+            ui.checkbox(&mut value, format!("{}", tag));
+        }
+    });
+
+    egui::CentralPanel::default().show(state.egui_renderer.context(), |ui| {
+        let available_size = ui.available_size();
+        ui.centered_and_justified(|ui| {
+            let image_response = ui.add(
+                Image::new((
+                    state.inner_texture_id,
+                    Vec2::new(
+                        state.inner_texture.size().width as f32,
+                        state.inner_texture.size().height as f32,
+                    ),
+                ))
+                .texture_options(TextureOptions::LINEAR)
+                .maintain_aspect_ratio(true)
+                .fit_to_exact_size(available_size)
+                .sense(Sense::click_and_drag()),
+            );
+
+            interaction.new_image_size = Some(available_size);
+
+            if image_response.dragged() {
+                interaction.pan_delta =
+                    Some(image_response.drag_delta() / interaction.new_image_size.unwrap());
+            }
+
+            if image_response.clicked_by(egui::PointerButton::Secondary) {
+                interaction.reset_transform = true;
+            }
+
+            if image_response.hovered() {
+                let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
+                if scroll_delta.y != 0.0 {
+                    interaction.zoom_delta = Some(scroll_delta.y * 0.001);
+                }
+                if let Some(latest_pos) = ui.input(|i| i.pointer.latest_pos().map(Pos2::to_vec2)) {
+                    let mut relative_position = latest_pos / interaction.new_image_size.unwrap();
+                    relative_position -= Vec2::new(0.5, 0.5);
+                    relative_position *= 2.0;
+                    relative_position.y *= -1.0;
+                    interaction.cursor_position = Some(relative_position);
+                }
+            }
+        });
+    });
+
+    if let Ok(mut store) = state.store.write() {
+        if let Some(selected_image) = selected_image {
+            store.select_image(selected_image, Some(&state.file_filters));
+        }
+    }
+    interaction
 }
 
 impl ApplicationHandler for App {

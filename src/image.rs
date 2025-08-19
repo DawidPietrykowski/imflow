@@ -35,6 +35,7 @@ use std::io::BufReader;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -82,7 +83,7 @@ impl ImageData {
         let home_dir = PathBuf::from_str(&env::var("HOME").unwrap()).unwrap();
         let cache_dir = home_dir.join(".cache/imflow");
         let hash_hex = format!("{:x}", self.hash);
-        return cache_dir.join(hash_hex).to_path_buf();
+        cache_dir.join(hash_hex).to_path_buf()
     }
 
     pub fn get_hash_str(&self) -> String {
@@ -141,7 +142,7 @@ pub fn swap_wh<T>(width: T, height: T, orientation: Orientation) -> (T, T) {
     (width, height)
 }
 
-fn get_format(path: &PathBuf) -> Option<ImageFormat> {
+fn get_format(path: &Path) -> Option<ImageFormat> {
     if !path.is_file() {
         return None;
     }
@@ -150,7 +151,7 @@ fn get_format(path: &PathBuf) -> Option<ImageFormat> {
         .unwrap()
         .to_str()
         .unwrap()
-        .starts_with(&['.'])
+        .starts_with(['.'])
     {
         return None;
     }
@@ -277,17 +278,15 @@ pub fn load_available_images(dir: PathBuf) -> Result<Vec<ImageData>, io::Error> 
         .iter()
         .sorted()
         .filter_map(|path| {
-            let Some(format) = get_format(&path) else {
-                return None;
-            };
-            let Ok(meta) = Metadata::new_from_path(&path) else {
+            let format = get_format(path)?;
+            let Ok(meta) = Metadata::new_from_path(path) else {
                 warn!("Image has no metadata, skipping: {:?}", path);
                 return None;
             };
             let embedded_thumbnail = if format == ImageFormat::Heif {
                 let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
                 let binding = ctx.top_level_image_handles();
-                let handle = binding.get(0).unwrap();
+                let handle = binding.first().unwrap();
                 handle.number_of_thumbnails() > 0
             } else if format == ImageFormat::Video {
                 false
@@ -297,10 +296,10 @@ pub fn load_available_images(dir: PathBuf) -> Result<Vec<ImageData>, io::Error> 
             let mut orientation = Orientation::from_exif(meta.get_orientation() as u8)
                 .unwrap_or(Orientation::NoTransforms);
             if format == ImageFormat::Video {
-                orientation = load_thumbnail_video(&path).unwrap().orientation;
+                orientation = load_thumbnail_video(path).unwrap().orientation;
                 debug!("video orientation: {:?}, {:?}", orientation, path);
             }
-            let hash = get_file_hash(&path);
+            let hash = get_file_hash(path);
             let tags = meta
                 .get_tag_multiple_strings(EXIF_TAGLIST_TAG)
                 .unwrap_or_default();
@@ -323,7 +322,7 @@ pub fn load_available_images(dir: PathBuf) -> Result<Vec<ImageData>, io::Error> 
 }
 
 pub fn check_embedded_thumbnail(path: &PathBuf) -> bool {
-    Metadata::new_from_path(path).map_or(false, |meta| meta.get_preview_images().is_some())
+    Metadata::new_from_path(path).is_ok_and(|meta| meta.get_preview_images().is_some())
 }
 
 pub fn get_embedded_thumbnail(image: &ImageData) -> Option<Vec<u8>> {
@@ -338,7 +337,7 @@ pub fn load_thumbnail(path: &ImageData) -> ImflowImageBuffer {
     let mut buffer: Option<Vec<u8>> = None;
     if cache_path.exists() {
         let read_bytes = fs::read(&cache_path).unwrap();
-        if read_bytes.len() != 0 {
+        if read_bytes.is_empty() {
             buffer = Some(read_bytes);
         }
     }
@@ -511,7 +510,7 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     let ctx = HeifContext::read_from_file(path.path.to_str().unwrap()).unwrap();
     let mut orientation = Orientation::NoTransforms;
     let binding = ctx.top_level_image_handles();
-    let handle = binding.get(0).unwrap();
+    let handle = binding.first().unwrap();
     let thumbnail_count = handle.number_of_thumbnails() as u32;
 
     let mut image = if resize && thumbnail_count > 0 {
@@ -524,7 +523,7 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
         let height = handle.height();
         let new_width: u32;
         let new_height: u32;
-        const VAR_NAME: f32 = 640 as f32;
+        const VAR_NAME: f32 = 640f32;
         if width > height {
             let scale = VAR_NAME / width as f32;
             new_width = VAR_NAME as u32;
@@ -542,16 +541,16 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
             .unwrap()
     } else {
         let binding = ctx.top_level_image_handles();
-        let handle = binding.get(0).unwrap();
+        let handle = binding.first().unwrap();
 
         // Get Exif
         let mut meta_ids: Vec<ItemId> = vec![0; 1];
         let count = handle.metadata_block_ids(&mut meta_ids, b"Exif");
         assert_eq!(count, 1);
-        if let Ok(exif) = handle.metadata(meta_ids[0]) {
-            if let Ok(metadata) = rexiv2::Metadata::new_from_buffer(&exif) {
-                orientation = Orientation::from_exif(metadata.get_orientation() as u8).unwrap();
-            }
+        if let Ok(exif) = handle.metadata(meta_ids[0])
+            && let Ok(metadata) = rexiv2::Metadata::new_from_buffer(&exif)
+        {
+            orientation = Orientation::from_exif(metadata.get_orientation() as u8).unwrap();
         }
 
         lib_heif
@@ -599,9 +598,11 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
 pub fn get_file_hash(path: &PathBuf) -> GenericArray<u8, U32> {
     let mut file = File::open(path).unwrap();
     let mut buf = [0u8; 16 * 1024];
-    file.read(&mut buf).unwrap();
+    let read_bytes = file.read(&mut buf).unwrap();
+    assert_ne!(read_bytes, 0);
+
     let mut hasher = Sha256::new();
-    hasher.update(&buf);
+    hasher.update(buf);
     hasher.update(file.metadata().unwrap().len().to_le_bytes());
     hasher.finalize()
 }
@@ -614,9 +615,9 @@ pub fn save_thumbnail(path: &PathBuf, image: ImflowImageBuffer) {
     }
     let mut file = File::create(path).unwrap();
     let u8_buffer = vec_u32_to_u8(image.rgba_buffer);
-    file.write(&(image.width as u32).to_le_bytes()).unwrap();
-    file.write(&(image.height as u32).to_le_bytes()).unwrap();
-    file.write(&(image.orientation.to_exif() as u32).to_le_bytes())
+    file.write_all(&(image.width as u32).to_le_bytes()).unwrap();
+    file.write_all(&(image.height as u32).to_le_bytes()).unwrap();
+    file.write_all(&(image.orientation.to_exif() as u32).to_le_bytes())
         .unwrap();
-    file.write(&u8_buffer).unwrap();
+    file.write_all(&u8_buffer).unwrap();
 }

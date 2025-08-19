@@ -87,7 +87,7 @@ pub fn read_rating_xmp(filename: PathBuf) -> Result<i32> {
         anyhow::bail!("XMP data not found in the file.");
     }
 
-    let xmp_meta = XmpMeta::from_str(std::str::from_utf8(&xmp_data.as_ref().unwrap()).unwrap());
+    let xmp_meta = XmpMeta::from_str(std::str::from_utf8(xmp_data.as_ref().unwrap()).unwrap());
 
     Ok(xmp_meta
         .unwrap()

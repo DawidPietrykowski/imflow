@@ -25,10 +25,7 @@ pub(crate) fn vec_u32_to_u8(buffer: Vec<u32>) -> Vec<u8> {
 }
 
 pub(crate) fn slice_u8_to_u32(rgba_buffer: &[u8]) -> &[u32] {
-    let u32_slice = unsafe {
-        std::slice::from_raw_parts(rgba_buffer.as_ptr() as *const u32, rgba_buffer.len() / 4)
-    };
-    u32_slice
+    unsafe { std::slice::from_raw_parts(rgba_buffer.as_ptr() as *const u32, rgba_buffer.len() / 4) }
 }
 
 pub(crate) fn round_to_4_multiple<T>(value: T) -> T

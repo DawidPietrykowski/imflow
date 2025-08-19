@@ -80,7 +80,6 @@ pub struct ImageStore {
     pub(crate) loaded_images_thumbnails: FxHashMap<ImageData, ImflowImageBuffer>,
     pub available_images: Vec<ImageData>,
     pub current_image_path: ImageData,
-    pub image_changed: bool,
     pub(crate) pool: ThreadPool,
     pub(crate) loader_rx: Receiver<(ImageData, ImflowImageBuffer)>,
     pub(crate) loader_tx: Sender<(ImageData, ImflowImageBuffer)>,
@@ -112,7 +111,7 @@ impl ImageStore {
     pub fn new(path: PathBuf) -> Result<Self, ImageStoreCreationError> {
         let current_image_id: usize = 0;
         let available_images = load_available_images(path)?;
-        if available_images.len() == 0 {
+        if available_images.is_empty() {
             panic!("No media files found");
         }
         let new_path = available_images[0].clone();
@@ -161,7 +160,6 @@ impl ImageStore {
             loader_tx,
             currently_loading,
             loaded_images_thumbnails: loaded_thumbnails,
-            image_changed: true,
             load_times,
             previous_id: None,
         };
@@ -176,7 +174,7 @@ impl ImageStore {
         let mut tags = HashMap::new();
         tags.insert(EDIT_TAG.to_string(), false);
         tags.insert(CROP_TAG.to_string(), false);
-        for (image_data, _) in &self.loaded_images_thumbnails {
+        for image_data in self.loaded_images_thumbnails.keys() {
             if !formats.contains_key(&image_data.format) {
                 formats.insert(image_data.format.clone(), true);
             }
@@ -216,9 +214,7 @@ impl ImageStore {
             TagAction::Toggle => !contains,
         };
 
-        if add && contains {
-            return;
-        } else if !add && !contains {
+        if (add && contains) || (!add && !contains) {
             return;
         }
 
@@ -335,14 +331,13 @@ impl ImageStore {
     fn set_image(&mut self, next_id: usize, filter: Option<&FileFilters>) {
         self.previous_id = Some(self.current_image_id);
 
-        let new_image = self.available_images[next_id as usize].clone();
+        let new_image = self.available_images[next_id].clone();
         if !self.loaded_images.contains_key(&new_image) {
             self.request_load(new_image.clone());
         }
         self.current_image_path = new_image;
-        self.current_image_id = next_id as usize;
+        self.current_image_id = next_id;
         self.preload_next_images(PRELOAD_NEXT_IMAGE_N, filter);
-        self.image_changed = true;
     }
 
     pub fn get_current_image(&self) -> Option<&ImflowImageBuffer> {
@@ -380,17 +375,17 @@ impl ImageStore {
         let buf = load_thumbnail(&self.current_image_path);
         self.loaded_images_thumbnails
             .insert(self.current_image_path.clone(), buf);
-        return self
-            .loaded_images_thumbnails
+
+        self.loaded_images_thumbnails
             .get(&self.current_image_path)
-            .unwrap();
+            .unwrap()
     }
 
     pub fn get_filtered_images(&self, filter: &FileFilters) -> Vec<ImageData> {
         self.available_images
             .iter()
             .filter(|f| filter.filter_image(f))
-            .map(|f| f.clone())
+            .cloned()
             .collect::<Vec<ImageData>>()
     }
 

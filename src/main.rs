@@ -7,14 +7,17 @@ mod egui_tools;
 
 use winit::event_loop::{ControlFlow, EventLoop};
 
+use crate::app::App;
+
 fn main() {
     if env::var("RUST_LOG").is_err() {
         unsafe { env::set_var("RUST_LOG", "info") }
     }
     env_logger::init();
-    rexiv2::initialize().expect("Unable to initialize rexiv2");
-    ffmpeg::init().unwrap();
+    rexiv2::initialize().expect("Failed to initialize rexiv2");
+    ffmpeg::init().expect("Failed to initialize ffmpeg");
     ffmpeg::log::set_level(ffmpeg_next::log::Level::Quiet);
+
     let args = Args::parse();
     let path = args.path.unwrap_or("./test_images".into());
     #[cfg(not(target_arch = "wasm32"))]
@@ -28,7 +31,7 @@ async fn run(path: PathBuf) {
 
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = app::App::new(path);
+    let mut app = App::new(path);
 
     event_loop.run_app(&mut app).expect("Failed to run app");
 }
