@@ -1,7 +1,7 @@
 use anyhow::{Error, Result};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use xmp_toolkit::{XmpMeta, xmp_ns};
 
@@ -79,8 +79,8 @@ const XMP_SEARCH_BUFFER_SIZE: usize = 4096 * 32;
 const XMP_END_SEARCH_SPACE_SIZE: usize = 4096 * 256;
 const XMP_MAX_SEARCH_SPACE_SIZE: usize = 4096 * 256;
 
-pub fn read_rating_xmp(filename: PathBuf) -> Result<i32> {
-    let xmp_data = extract_xmp_data(filename.clone(), true)?
+pub fn read_rating_xmp(filename: &Path) -> Result<i32> {
+    let xmp_data = extract_xmp_data(filename, true)?
         .or_else(|| extract_xmp_data(filename, false).unwrap());
 
     if xmp_data.is_none() {
@@ -96,7 +96,7 @@ pub fn read_rating_xmp(filename: PathBuf) -> Result<i32> {
 }
 
 fn extract_xmp_data(
-    filename: PathBuf,
+    filename: &Path,
     read_from_end_of_file: bool,
 ) -> Result<Option<Vec<u8>>, Error> {
     let file = File::open(filename).unwrap();
