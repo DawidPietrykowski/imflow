@@ -6,14 +6,18 @@ use image::Rgba;
 use image::imageops::FilterType;
 use image::metadata::Orientation;
 use itertools::Itertools;
-use jpegxl_rs::Endianness;
-use jpegxl_rs::decode::PixelFormat;
-use jpegxl_rs::decoder_builder;
+use jxl_oxide::integration::JxlDecoder;
+use image::ImageDecoder;
+// use jpegxl_rs::Endianness;
+// use jpegxl_rs::decode::PixelFormat;
+// use jpegxl_rs::decoder_builder;
+// use jxl_oxide::integration::JxlDecoder;
 use libheif_rs::ItemId;
 use libheif_rs::{HeifContext, LibHeif, RgbChroma};
 use log::debug;
 use log::warn;
 use rexiv2::Metadata;
+// use rexiv2::Metadata;
 use sha2::Digest;
 use sha2::Sha256;
 use sha2::digest::consts::U32;
@@ -46,7 +50,7 @@ use crate::utils::vec_u32_to_u8;
 use crate::xmp::read_rating_xmp;
 
 const EXIF_TAGLIST_TAG: &str = "Xmp.digiKam.TagsList";
-const EXIF_RATING_TAG: &str = "Xmp.xmp.Rating";
+// const EXIF_RATING_TAG: &str = "Xmp.xmp.Rating";
 
 #[derive(Clone, Eq, Hash, PartialEq, PartialOrd)]
 pub enum ImageFormat {
@@ -115,11 +119,12 @@ pub struct ImflowImageBuffer {
 }
 
 pub fn get_rating(image: &ImageData) -> i32 {
-    if let Ok(meta) = Metadata::new_from_path(&image.path) {
-        meta.get_tag_numeric(EXIF_RATING_TAG)
-    } else {
-        0
-    }
+    read_rating_xmp(&image.path).unwrap_or(0)
+    // if let Ok(meta) = Metadata::new_from_path(&image.path) {
+    //     meta.get_tag_numeric(EXIF_RATING_TAG)
+    // } else {
+    //     0
+    // }
 }
 
 pub fn get_orientation(path: &PathBuf) -> Orientation {
@@ -218,38 +223,59 @@ fn load_jpg(image: &ImageData) -> Result<ImflowImageBuffer, MediaLoadError> {
         orientation,
     })
 }
-
+use exif::Reader;
+use exif::Tag;
 fn load_jxl(image: &ImageData) -> Result<ImflowImageBuffer, MediaLoadError> {
-    let file = read(&image.path)?;
+    // let file = read(&image.path)?;
 
-    let runner = jpegxl_rs::ThreadsRunner::default();
-    let decoder = decoder_builder()
-        .parallel_runner(&runner)
-        .pixel_format(PixelFormat {
-            num_channels: 4,
-            endianness: Endianness::Big,
-            align: 8,
-        })
-        .build()
-        .map_err(|e| MediaLoadError::Decoding(format!("Failed to create JXL decoder: {}", e)))?;
+    // let file = std::fs::File::open(image.path).expect("cannot open file");
+    // let mut decoder = JxlDecoder::new(file).expect("cannot decode image");
 
-    let (metadata, buffer) = decoder
-        .decode_with::<u8>(&file)
-        .map_err(|e| MediaLoadError::Decoding(format!("Failed to decode JXL image: {}", e)))?;
-    let rgba_buffer = vec_u8_to_u32(buffer);
+    // let exif = decoder
+    //     .exif_metadata()
+    //     .expect("cannot decode Exif metadata");
+    // let Some(exif) = exif else {
+    //     return Err(MediaLoadError::Decoding("No exif metadata found".to_string()));
+    // };
 
-    let width = metadata.width as usize;
-    let height = metadata.height as usize;
-    // TODO: convert
-    // let orientation = metadata.orientation;
-    let orientation = image.orientation;
+    // let (width, height) = decoder.dimensions();
+    // decoder.read_image().unwrap();
+    todo!();
 
-    Ok(ImflowImageBuffer {
-        width,
-        height,
-        rgba_buffer,
-        orientation,
-    })
+    // let exif_reader = Reader::new();
+    // let Ok(metadata) = exif_reader.read_raw(exif) else {
+    //     return Err(MediaLoadError::Decoding("Exif decoding failed".to_string()));
+    // };
+    // metadata.get_field(Tag::ReferenceBlackWhite, ifd_num)
+
+    // let runner = jpegxl_rs::ThreadsRunner::default();
+    // let decoder = decoder_builder()
+    //     .parallel_runner(&runner)
+    //     .pixel_format(PixelFormat {
+    //         num_channels: 4,
+    //         endianness: Endianness::Big,
+    //         align: 8,
+    //     })
+    //     .build()
+    //     .map_err(|e| MediaLoadError::Decoding(format!("Failed to create JXL decoder: {}", e)))?;
+
+    // let (metadata, buffer) = decoder
+    //     .decode_with::<u8>(&file)
+    //     .map_err(|e| MediaLoadError::Decoding(format!("Failed to decode JXL image: {}", e)))?;
+    // let rgba_buffer = vec_u8_to_u32(buffer);
+
+    // let width = metadata.width as usize;
+    // let height = metadata.height as usize;
+    // // TODO: convert
+    // // let orientation = metadata.orientation;
+    // let orientation = image.orientation;
+
+    // Ok(ImflowImageBuffer {
+    //     width,
+    //     height,
+    //     rgba_buffer,
+    //     orientation,
+    // })
 }
 
 pub fn image_to_rgba_buffer(img: DynamicImage) -> Vec<u32> {
@@ -303,10 +329,11 @@ pub fn load_available_images(dir: PathBuf) -> Result<Vec<ImageData>, io::Error> 
             let tags = meta
                 .get_tag_multiple_strings(EXIF_TAGLIST_TAG)
                 .unwrap_or_default();
-            let rating = match format {
-                ImageFormat::Video => read_rating_xmp(path.clone()).unwrap_or(0),
-                _ => meta.get_tag_numeric(EXIF_RATING_TAG),
-            };
+            let rating = read_rating_xmp(&path).unwrap_or(0);
+            // let rating = match format {
+            //     ImageFormat::Video => read_rating_xmp(&path).unwrap_or(0),
+            //     _ => meta.get_tag_numeric(EXIF_RATING_TAG),
+            // };
             Some(ImageData {
                 path: path.clone(),
                 format,

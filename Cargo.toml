@@ -14,22 +14,25 @@ clap = { version = "4.5.34", features = ["derive"] }
 
 image = "0.25.6"
 zune-image = {version = "0.4.15", features = ["all"]}
+jxl-oxide = {version = "0.12.4", features = ["rayon", "image"]}
 libheif-rs = "1.1.0"
-jpegxl-rs = "0.11.2"
+# jpegxl-rs = "0.11.2"
+ffmpeg-next = "7.1.0"
+
+rexiv2 = "0.10.0"
+xmp_toolkit = "1.10.0"
+exiftool = "0.2.3"
+kamadak-exif = "0.6.1"
 
 itertools = "0.12"
-rexiv2 = "0.10.0"
 threadpool = "1.8.1"
 bytemuck = "1.22.0"
 sha2 = "0.10.8"
 zerocopy = "0.8.24"
 crossbeam-channel = "0.5.15"
 rayon = "1.10.0"
-exiftool = "0.2.3"
 rustc-hash = "2.1.1"
 open = "5.3.2"
-ffmpeg-next = "7.1.0"
-xmp_toolkit = "1.10.0"
 anyhow = "1.0.99"
 thiserror = "2.0.15"
 log = "0.4.27"
