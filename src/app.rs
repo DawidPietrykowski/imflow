@@ -859,7 +859,7 @@ fn clear_texture_command(encoder: &mut wgpu::CommandEncoder, texture_view: &wgpu
 fn draw_ui(
     state: &mut AppState,
     window: &Arc<Window>,
-    filtered_images: Vec<ImageData>,
+    filtered_images: Vec<(ImageData, Option<Orientation>)>,
     current_image: ImageData,
     mut selected_image: Option<ImageData>,
 ) -> UiInteraction {
@@ -924,7 +924,7 @@ fn draw_ui(
                 .show(panel_ui, |ui| {
                     ui.set_max_width(f32::INFINITY);
                     ui.horizontal_centered(|horizontal| {
-                        for image in filtered_images {
+                        for (image, orientation) in filtered_images {
                             if image.rating >= 0
                                 && image.rating < 6
                                 && !state.file_filters.rating[image.rating as usize]
@@ -947,11 +947,11 @@ fn draw_ui(
                                     Orientation::Rotate90FlipH,
                                     Orientation::Rotate270FlipH,
                                 ]
-                                .contains(&image.orientation)
+                                .contains(&orientation.unwrap())
                                 {
                                     egui_image = egui_image.rotate(PI / 2.0, Vec2::splat(0.5));
                                 } else {
-                                    egui_image = egui_image.uv(get_uv_transform(image.orientation));
+                                    egui_image = egui_image.uv(get_uv_transform(orientation.unwrap()));
                                 }
                             }
                             let image_widget = horizontal.add(egui_image);

@@ -2,6 +2,7 @@ use crate::image::{ImageData, ImageFormat, load_thumbnail};
 use crate::image::{ImflowImageBuffer, load_available_images, load_image};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use exiftool::ExifTool;
+use image::metadata::Orientation;
 use log::{debug, info};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
@@ -381,12 +382,12 @@ impl ImageStore {
             .unwrap()
     }
 
-    pub fn get_filtered_images(&self, filter: &FileFilters) -> Vec<ImageData> {
+    pub fn get_filtered_images(&self, filter: &FileFilters) -> Vec<(ImageData, Option<Orientation>)> {
         self.available_images
             .iter()
             .filter(|f| filter.filter_image(f))
-            .cloned()
-            .collect::<Vec<ImageData>>()
+            .map(|f| (f.clone(), self.loaded_images_thumbnails.get(f).map(|f| f.orientation)))
+            .collect()
     }
 
     fn evict_images(&mut self, count: usize) {
