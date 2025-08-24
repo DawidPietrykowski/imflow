@@ -37,6 +37,7 @@ anyhow = "1.0.99"
 thiserror = "2.0.15"
 log = "0.4.27"
 env_logger = "0.11.8"
+nom-exif = "2.5.4"
 
 [profile.release]
 opt-level = 3
