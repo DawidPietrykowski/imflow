@@ -6,6 +6,7 @@ use image::metadata::Orientation;
 use log::{debug, info};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
+use winit::event_loop::EventLoopProxy;
 use std::collections::HashSet;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
@@ -14,11 +15,17 @@ use std::path::PathBuf;
 use std::time::Instant;
 use threadpool::ThreadPool;
 
-const PRELOAD_NEXT_IMAGE_N: usize = 15;
+const PRELOAD_NEXT_IMAGE_N: usize = 0;
 const MAX_LOADED_IMAGES: usize = 450;
 
 pub const EDIT_TAG: &str = "edit";
 pub const CROP_TAG: &str = "crop";
+
+#[derive(Debug, Clone)]
+pub enum AppEvent {
+    ImageLoaded(ImageData),
+    ThumbnailsLoaded(usize),
+}
 
 #[derive(PartialEq)]
 pub enum TagAction {
@@ -87,6 +94,8 @@ pub struct ImageStore {
     pub(crate) currently_loading: HashSet<ImageData>,
     pub load_times: VecDeque<ImageData>,
     previous_id: Option<usize>,
+    event_loop_proxy: EventLoopProxy<AppEvent>
+    // context: egui::Context,
 }
 
 #[derive(Debug)]
@@ -109,7 +118,7 @@ impl From<io::Error> for ImageStoreCreationError {
 impl std::error::Error for ImageStoreCreationError {}
 
 impl ImageStore {
-    pub fn new(path: PathBuf) -> Result<Self, ImageStoreCreationError> {
+    pub fn new(path: PathBuf, event_loop_proxy: EventLoopProxy<AppEvent>) -> Result<Self, ImageStoreCreationError> {
         let current_image_id: usize = 0;
         let available_images = load_available_images(path)?;
         if available_images.is_empty() {
@@ -163,6 +172,8 @@ impl ImageStore {
             loaded_images_thumbnails: loaded_thumbnails,
             load_times,
             previous_id: None,
+            event_loop_proxy
+            // context
         };
 
         state.preload_next_images(PRELOAD_NEXT_IMAGE_N, None);
@@ -275,8 +286,13 @@ impl ImageStore {
         let tx = self.loader_tx.clone();
         self.currently_loading.insert(path.clone());
 
+        let context = self.event_loop_proxy.clone();
         self.pool.execute(move || {
+            debug!("Requested load of: {:?}", path.path);
             let image = load_image(&path.clone()).unwrap();
+            debug!("Loaded: {:?}", path.path);
+            context.send_event(AppEvent::ImageLoaded(path.clone())).unwrap();
+            debug!("Requested repaint: {:?}", path.path);
             let _ = tx.send((path, image));
         });
     }
@@ -285,7 +301,7 @@ impl ImageStore {
         while let Ok((path, image)) = self.loader_rx.try_recv() {
             self.loaded_images.insert(path.clone(), image);
             self.currently_loading.remove(&path);
-            self.load_times.push_front(path);
+            self.load_times.push_front(path.clone());
 
             if self.loaded_images.len() > MAX_LOADED_IMAGES {
                 self.evict_images(15);

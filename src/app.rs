@@ -8,9 +8,10 @@ use egui_wgpu::wgpu::{Limits, SurfaceError};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::metadata::Orientation;
 use imflow::image::{ImageData, swap_wh};
-use imflow::store::{CROP_TAG, EDIT_TAG, FileFilters, ImageStore, TagAction};
+use imflow::store::{AppEvent, FileFilters, ImageStore, TagAction, CROP_TAG, EDIT_TAG};
 use itertools::Itertools;
 use log::{debug, info};
+use std::backtrace::Backtrace;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::path::PathBuf;
@@ -21,7 +22,7 @@ use wgpu::{PipelineCompilationOptions, SurfaceConfiguration};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::WindowEvent;
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::platform::x11::WindowAttributesExtX11;
 use winit::window::{Window, WindowId};
 
@@ -307,6 +308,7 @@ impl AppState {
         width: u32,
         height: u32,
         path: PathBuf,
+        event_loop_proxy: EventLoopProxy<AppEvent>
     ) -> Self {
         let power_pref = wgpu::PowerPreference::default();
         let adapter = instance
@@ -359,7 +361,8 @@ impl AppState {
 
         let mut egui_renderer = EguiRenderer::new(&device, surface_config.format, None, 1, window);
 
-        let image_store = ImageStore::new(path).expect("Failed loading images");
+        // let image_store = ImageStore::new(path, egui_renderer.context().clone()).expect("Failed loading images");
+        let image_store = ImageStore::new(path, event_loop_proxy).expect("Failed loading images");
 
         let file_filters = image_store.generate_file_filters();
 
@@ -452,16 +455,18 @@ pub struct App {
     state: Option<AppState>,
     window: Option<Arc<Window>>,
     path: PathBuf,
+    event_loop_proxy: EventLoopProxy<AppEvent>
 }
 
 impl App {
-    pub fn new(path: PathBuf) -> Self {
+    pub fn new(path: PathBuf, event_loop_proxy: EventLoopProxy<AppEvent>) -> Self {
         let instance = egui_wgpu::wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         Self {
             instance,
             state: None,
             window: None,
             path,
+            event_loop_proxy
         }
     }
 
@@ -493,6 +498,7 @@ impl App {
             initial_width,
             initial_width,
             self.path.clone(),
+            self.event_loop_proxy.clone()
         )
         .await;
 
@@ -535,6 +541,8 @@ impl App {
                 "updating image: {:?} {:?} {:?}",
                 imbuf.width, imbuf.height, imbuf.orientation
             );
+            let bt = Backtrace::capture();
+            println!("Stack trace:\n{}", bt);
             let width = imbuf.width as u32;
             let height = imbuf.height as u32;
             let buffer_u8 = unsafe {
@@ -940,7 +948,7 @@ fn draw_ui(
                                 .shrink_to_fit()
                                 .corner_radius(10)
                                 .sense(Sense::click());
-                            if !image.embedded_thumbnail {
+                            // if !image.embedded_thumbnail {
                                 if [
                                     Orientation::Rotate90,
                                     Orientation::Rotate270,
@@ -949,11 +957,11 @@ fn draw_ui(
                                 ]
                                 .contains(&orientation.unwrap())
                                 {
-                                    egui_image = egui_image.rotate(PI / 2.0, Vec2::splat(0.5));
+                                    egui_image = egui_image.rotate(-PI / 2.0, Vec2::splat(0.5));
                                 } else {
                                     egui_image = egui_image.uv(get_uv_transform(orientation.unwrap()));
                                 }
-                            }
+                            // }
                             let image_widget = horizontal.add(egui_image);
                             if changed_image && current_image == image {
                                 image_widget.scroll_to_me(Some(Align::Center));
@@ -1045,13 +1053,22 @@ fn draw_ui(
     interaction
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attributes = Window::default_attributes()
             .with_base_size(LogicalSize::new(2000, 4000))
             .with_resizable(true);
         let window = event_loop.create_window(attributes).unwrap();
         pollster::block_on(self.set_window(window));
+    }
+
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
+        // println!("NEW event");
+        // if let (Some(state), Some(window)) = (self.state.as_mut(), self.window.as_ref()) {
+        //     if state.egui_renderer.context().has_requested_repaint() {
+        //         window.request_redraw();
+        //     }
+        // }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
