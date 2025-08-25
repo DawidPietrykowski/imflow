@@ -30,6 +30,7 @@ use zune_image::codecs::qoi::zune_core::options::DecoderOptions;
 
 use std::cmp::max;
 use std::env;
+use std::fmt::Debug;
 use std::fmt::Display;
 use std::fs;
 use std::fs::File;
@@ -72,6 +73,12 @@ impl Display for ImageFormat {
     }
 }
 
+impl Debug for ImageFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(format!("{}", self).as_str())
+    }
+}
+
 #[derive(Clone)]
 pub struct ImageData {
     pub path: PathBuf,
@@ -110,6 +117,19 @@ impl PartialEq for ImageData {
 }
 
 impl Eq for ImageData {}
+
+impl Debug for ImageData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImageData")
+            .field("path", &self.path)
+            .field("format", &self.format)
+            .field("embedded_thumbnail", &self.embedded_thumbnail)
+            .field("hash", &self.hash)
+            .field("rating", &self.rating)
+            .field("tags", &self.tags)
+            .finish()
+    }
+}
 
 #[derive(Clone)]
 pub struct ImflowImageBuffer {
@@ -414,6 +434,7 @@ pub fn load_thumbnail(path: &ImageData) -> ImflowImageBuffer {
         }
     }
     if let Some(bytes) = buffer {
+        debug!("Loading thumbnail for: {:?}", path.path);
         let width = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
         let height = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
         let orientation =
@@ -478,6 +499,9 @@ pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
             .unwrap()
             .as_u32()
             .unwrap() as u64;
+        let thumbnail_orientation = exif
+            .get_by_ifd_tag_code(1, nom_exif::ExifTag::Orientation.code())
+            .map(|e| e.as_u16().unwrap() as u8);
         // TODO: Support other formats
         let compression = exif
             .get_by_ifd_tag_code(1, nom_exif::ExifTag::Compression.code())
@@ -511,13 +535,15 @@ pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
         let width: usize = image.width() as usize;
         let height: usize = image.height() as usize;
         let rgba_buffer = image_to_rgba_buffer(image);
-        // let width =image.width();
+        let orientation = thumbnail_orientation
+            .map(|o| Orientation::from_exif(o).unwrap())
+            .unwrap_or(Orientation::NoTransforms);
 
         Some(ImflowImageBuffer {
             width,
             height,
             rgba_buffer,
-            orientation: Orientation::NoTransforms,
+            orientation,
         })
 
         // let Ok(exif) = Reader::new().read_from_container(&mut std::io::BufReader::new(&path.path)) else {
