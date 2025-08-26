@@ -335,66 +335,66 @@ fn load_media_files(dir: &PathBuf) -> Result<Vec<PathBuf>, io::Error> {
     Ok(all_entries)
 }
 
-pub fn load_available_images(dir: PathBuf) -> Result<Vec<ImageData>, io::Error> {
-    let images: Vec<ImageData> = load_media_files(&dir)?
-        .iter()
-        .sorted()
-        .filter_map(|path| {
-            let format = get_format(path)?;
+pub fn load_available_images(dir: PathBuf) -> Result<Vec<PathBuf>, io::Error> {
+    load_media_files(&dir)
+    // let images: Vec<PathBuf> = load_media_files(&dir)?
+        // .iter()
+        // .sorted()
+        // .filter_map(|path| {
+        //     let format = get_format(path)?;
 
-            let file = std::fs::File::open(path).unwrap();
-            // exif.get_field(tag, ifd_num)
-            // println!("Read orientation {orientation:?}");
-            // return orientation;
-            // exif.
+        //     let file = std::fs::File::open(path).unwrap();
+        //     // exif.get_field(tag, ifd_num)
+        //     // println!("Read orientation {orientation:?}");
+        //     // return orientation;
+        //     // exif.
 
-            // let Ok(meta) = Metadata::new_from_path(path) else {
-            //     warn!("Image has no metadata, skipping: {:?}", path);
-            //     return None;
-            // };
-            println!("path: {:?}", path);
-            let embedded_thumbnail = if format == ImageFormat::Heif {
-                let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
-                let binding = ctx.top_level_image_handles();
-                let handle = binding.first().unwrap();
-                handle.number_of_thumbnails() > 0
-            } else if format == ImageFormat::Video {
-                false
-            } else {
-                has_thumbnail(file)
-                // meta.get_preview_images().is_some()
-            };
-            // let mut orientation = Orientation::from_exif(meta.get_orientation() as u8)
-            //     .unwrap_or(Orientation::NoTransforms);
-            // let orientation = if format == ImageFormat::Video {
-            //     let orientation = load_thumbnail_video(path).unwrap().orientation;
-            //     debug!("video orientation: {:?}, {:?}", orientation, path);
-            //     orientation
-            // } else {
-            //     Orientation::from_exif(exif_reader.unwrap().get_field(Tag::Orientation, exif::In(0)).map(|f| f.value.as_uint().unwrap().get(0).unwrap()).unwrap_or(0) as u8).unwrap()
-            // };
-            let hash = get_file_hash(path);
-            // let tags = meta
-            //     .get_tag_multiple_strings(EXIF_TAGLIST_TAG)
-            //     .unwrap_or_default();
-            let tags = vec![];
-            let rating = read_rating_xmp(&path).unwrap_or(0);
-            // match format {
-            //     ImageFormat::Video => ,
-            //     _ => meta.get_tag_numeric(EXIF_RATING_TAG),
-            // };
-            Some(ImageData {
-                path: path.clone(),
-                format,
-                embedded_thumbnail,
-                // orientation, // TODO: we might not know the final rotation at this point (such as with videos)
-                hash,
-                rating,
-                tags,
-            })
-        })
-        .collect();
-    Ok(images)
+        //     // let Ok(meta) = Metadata::new_from_path(path) else {
+        //     //     warn!("Image has no metadata, skipping: {:?}", path);
+        //     //     return None;
+        //     // };
+        //     println!("path: {:?}", path);
+        //     let embedded_thumbnail = if format == ImageFormat::Heif {
+        //         let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
+        //         let binding = ctx.top_level_image_handles();
+        //         let handle = binding.first().unwrap();
+        //         handle.number_of_thumbnails() > 0
+        //     } else if format == ImageFormat::Video {
+        //         false
+        //     } else {
+        //         has_thumbnail(file)
+        //         // meta.get_preview_images().is_some()
+        //     };
+        //     // let mut orientation = Orientation::from_exif(meta.get_orientation() as u8)
+        //     //     .unwrap_or(Orientation::NoTransforms);
+        //     // let orientation = if format == ImageFormat::Video {
+        //     //     let orientation = load_thumbnail_video(path).unwrap().orientation;
+        //     //     debug!("video orientation: {:?}, {:?}", orientation, path);
+        //     //     orientation
+        //     // } else {
+        //     //     Orientation::from_exif(exif_reader.unwrap().get_field(Tag::Orientation, exif::In(0)).map(|f| f.value.as_uint().unwrap().get(0).unwrap()).unwrap_or(0) as u8).unwrap()
+        //     // };
+        //     let hash = get_file_hash(path);
+        //     // let tags = meta
+        //     //     .get_tag_multiple_strings(EXIF_TAGLIST_TAG)
+        //     //     .unwrap_or_default();
+        //     let tags = vec![];
+        //     let rating = read_rating_xmp(&path).unwrap_or(0);
+        //     // match format {
+        //     //     ImageFormat::Video => ,
+        //     //     _ => meta.get_tag_numeric(EXIF_RATING_TAG),
+        //     // };
+        //     Some(ImageData {
+        //         path: path.clone(),
+        //         format,
+        //         embedded_thumbnail,
+        //         hash,
+        //         rating,
+        //         tags,
+        //     })
+        // })
+        // .collect();
+    // Ok(images)
 }
 
 fn has_thumbnail(file: File) -> bool {
@@ -423,6 +423,55 @@ fn has_thumbnail(file: File) -> bool {
 //         .first()
 //         .and_then(|preview| preview.get_data().ok())
 // }
+
+pub fn load_file_data(path: &Path) -> Option<(ImageData, Option<ImflowImageBuffer>)> {
+    let format = get_format(path)?;
+    let file = std::fs::File::open(path).unwrap();
+    debug!("Loading file data from: {:?}", path);
+    let thumbnail = match format {
+        ImageFormat::Jpg => {
+            has_thumbnail(file);
+        },
+        ImageFormat::Jxl => None,
+        ImageFormat::Heif => {
+            let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
+            let binding = ctx.top_level_image_handles();
+            let handle = binding.first().unwrap();
+            if handle.number_of_thumbnails() > 0 {
+                
+            } else {
+                None
+            }
+        },
+        ImageFormat::Video => {
+            None
+        },
+    };
+    // let mut orientation = Orientation::from_exif(meta.get_orientation() as u8)
+    //     .unwrap_or(Orientation::NoTransforms);
+    // let orientation = if format == ImageFormat::Video {
+    //     let orientation = load_thumbnail_video(path).unwrap().orientation;
+    //     debug!("video orientation: {:?}, {:?}", orientation, path);
+    //     orientation
+    // } else {
+    //     Orientation::from_exif(exif_reader.unwrap().get_field(Tag::Orientation, exif::In(0)).map(|f| f.value.as_uint().unwrap().get(0).unwrap()).unwrap_or(0) as u8).unwrap()
+    // };
+    let hash = get_file_hash(path);
+    // let tags = meta
+    //     .get_tag_multiple_strings(EXIF_TAGLIST_TAG)
+    //     .unwrap_or_default();
+    let tags = vec![];
+    let rating = read_rating_xmp(&path).unwrap_or(0);
+    let data = ImageData {
+        path: path.clone(),
+        format,
+        embedded_thumbnail,
+        hash,
+        rating,
+        tags,
+    };
+    let buffer = load_thumbnail(data)
+}
 
 pub fn load_thumbnail(path: &ImageData) -> ImflowImageBuffer {
     let cache_path = path.get_cache_path();
