@@ -8,9 +8,9 @@ use egui_wgpu::wgpu::{Limits, SurfaceError};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::metadata::Orientation;
 use imflow::image::{ImageData, swap_wh};
-use imflow::store::{AppEvent, FileFilters, ImageStore, TagAction, CROP_TAG, EDIT_TAG};
+use imflow::store::{AppEvent, CROP_TAG, EDIT_TAG, FileFilters, ImageStore, TagAction};
 use itertools::Itertools;
-use log::{debug, info};
+use log::{debug, info, trace};
 use std::backtrace::Backtrace;
 use std::collections::HashMap;
 use std::f32::consts::PI;
@@ -308,7 +308,7 @@ impl AppState {
         width: u32,
         height: u32,
         path: PathBuf,
-        event_loop_proxy: EventLoopProxy<AppEvent>
+        event_loop_proxy: EventLoopProxy<AppEvent>,
     ) -> Self {
         let power_pref = wgpu::PowerPreference::default();
         let adapter = instance
@@ -326,15 +326,13 @@ impl AppState {
             ..Default::default()
         };
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features: features,
-                    required_limits: limits,
-                    memory_hints: Default::default(),
-                    trace: wgpu::Trace::Off,
-                },
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: features,
+                required_limits: limits,
+                memory_hints: Default::default(),
+                trace: wgpu::Trace::Off,
+            })
             .await
             .expect("Failed to create device");
 
@@ -435,7 +433,7 @@ impl AppState {
     }
 
     pub fn recreate_texture(&mut self) {
-        debug!("recreating texture");
+        trace!("recreating texture");
         (self.inner_texture, self.inner_texture_view) = create_inner_render_target(
             &self.device,
             self.inner_size.x as u32,
@@ -455,7 +453,7 @@ pub struct App {
     state: Option<AppState>,
     window: Option<Arc<Window>>,
     path: PathBuf,
-    event_loop_proxy: EventLoopProxy<AppEvent>
+    event_loop_proxy: EventLoopProxy<AppEvent>,
 }
 
 impl App {
@@ -466,7 +464,7 @@ impl App {
             state: None,
             window: None,
             path,
-            event_loop_proxy
+            event_loop_proxy,
         }
     }
 
@@ -498,7 +496,7 @@ impl App {
             initial_width,
             initial_width,
             self.path.clone(),
-            self.event_loop_proxy.clone()
+            self.event_loop_proxy.clone(),
         )
         .await;
 
@@ -949,18 +947,18 @@ fn draw_ui(
                                 .corner_radius(10)
                                 .sense(Sense::click());
                             // if !image.embedded_thumbnail {
-                                if [
-                                    Orientation::Rotate90,
-                                    Orientation::Rotate270,
-                                    Orientation::Rotate90FlipH,
-                                    Orientation::Rotate270FlipH,
-                                ]
-                                .contains(&orientation.unwrap())
-                                {
-                                    egui_image = egui_image.rotate(-PI / 2.0, Vec2::splat(0.5));
-                                } else {
-                                    egui_image = egui_image.uv(get_uv_transform(orientation.unwrap()));
-                                }
+                            if [
+                                Orientation::Rotate90,
+                                Orientation::Rotate270,
+                                Orientation::Rotate90FlipH,
+                                Orientation::Rotate270FlipH,
+                            ]
+                            .contains(&orientation.unwrap())
+                            {
+                                egui_image = egui_image.rotate(-PI / 2.0, Vec2::splat(0.5));
+                            } else {
+                                egui_image = egui_image.uv(get_uv_transform(orientation.unwrap()));
+                            }
                             // }
                             let image_widget = horizontal.add(egui_image);
                             if changed_image && current_image == image {
@@ -1062,13 +1060,10 @@ impl ApplicationHandler<AppEvent> for App {
         pollster::block_on(self.set_window(window));
     }
 
-    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
-        // println!("NEW event");
-        // if let (Some(state), Some(window)) = (self.state.as_mut(), self.window.as_ref()) {
-        //     if state.egui_renderer.context().has_requested_repaint() {
-        //         window.request_redraw();
-        //     }
-        // }
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: AppEvent) {
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
