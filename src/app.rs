@@ -332,8 +332,8 @@ impl AppState {
                     required_features: features,
                     required_limits: limits,
                     memory_hints: Default::default(),
+                    trace: wgpu::Trace::Off,
                 },
-                None,
             )
             .await
             .expect("Failed to create device");
@@ -1264,7 +1264,7 @@ impl ImageLoader for ImflowEguiLoader {
             let binding = self.store.read().unwrap();
             binding.get_thumbnail_hash(id.clone()).clone()
         };
-        let mut image = ColorImage::new([imbuf.width, imbuf.height], Color32::BLACK);
+        let mut image = ColorImage::filled([imbuf.width, imbuf.height], Color32::BLACK);
         let image_buffer = image.as_raw_mut();
         for (i, &value) in imbuf.rgba_buffer.iter().enumerate() {
             let bytes = value.to_le_bytes();
@@ -1276,6 +1276,7 @@ impl ImageLoader for ImflowEguiLoader {
             image: Arc::new(ColorImage {
                 size: [imbuf.width, imbuf.height],
                 pixels: image.pixels,
+                source_size: Vec2::new(imbuf.width as f32, imbuf.height as f32),
             }),
         });
         cache.insert(id, res.clone());

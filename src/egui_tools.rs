@@ -24,7 +24,7 @@ impl EguiRenderer {
         window: &Window,
     ) -> EguiRenderer {
         let egui_context = Context::default();
-        egui_context.options_mut(|o| o.line_scroll_speed = 200.0);
+        egui_context.options_mut(|o| o.input_options.line_scroll_speed = 200.0);
         egui_context.style_mut(|s| s.scroll_animation.duration = Rangef::new(0.1, 1.0));
         egui_context.set_visuals_of(
             egui::Theme::Dark,
