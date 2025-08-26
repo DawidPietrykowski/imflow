@@ -1,4 +1,5 @@
 use anyhow::{Error, Result};
+use log::debug;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -80,7 +81,7 @@ const XMP_END_SEARCH_SPACE_SIZE: usize = 4096 * 256;
 const XMP_MAX_SEARCH_SPACE_SIZE: usize = 4096 * 256;
 
 pub fn read_rating_xmp(filename: &Path) -> Result<i32> {
-    let xmp_data = extract_xmp_data(filename, true)?
+    let xmp_data = extract_xmp_data(filename, true).unwrap()
         .or_else(|| extract_xmp_data(filename, false).unwrap());
 
     if xmp_data.is_none() {
@@ -100,6 +101,7 @@ fn extract_xmp_data(
     read_from_end_of_file: bool,
 ) -> Result<Option<Vec<u8>>, Error> {
     let file = File::open(filename).unwrap();
+    let file_size = file.metadata().unwrap().len();
     let mut reader = BufReader::new(file);
     let mut buffer = vec![0; XMP_SEARCH_BUFFER_SIZE];
     let mut total_bytes_read = 0;
@@ -109,7 +111,11 @@ fn extract_xmp_data(
     let mut xmp_data = XMP_START.to_vec();
 
     if read_from_end_of_file {
-        reader.seek(SeekFrom::End(-(XMP_END_SEARCH_SPACE_SIZE as i64)))?;
+        if file_size <= XMP_END_SEARCH_SPACE_SIZE as u64{
+            reader.seek(SeekFrom::Start(0))?;
+        } else {
+            reader.seek(SeekFrom::End(-(XMP_END_SEARCH_SPACE_SIZE as i64)))?;
+        }
     }
 
     while let Ok(n) = reader.read(&mut buffer) {
