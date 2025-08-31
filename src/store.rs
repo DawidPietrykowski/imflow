@@ -1,8 +1,9 @@
-use crate::image::{ImageData, ImageFormat, load_thumbnail};
+use crate::image::{load_file_data, ImageData, ImageFormat};
 use crate::image::{ImflowImageBuffer, load_available_images, load_image};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use exiftool::ExifTool;
 use image::metadata::Orientation;
+use itertools::Itertools;
 use log::{debug, info};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
@@ -122,36 +123,47 @@ impl ImageStore {
         event_loop_proxy: EventLoopProxy<AppEvent>,
     ) -> Result<Self, ImageStoreCreationError> {
         let current_image_id: usize = 0;
-        let available_images = load_available_images(path)?;
-        if available_images.is_empty() {
+        let available_paths = load_available_images(path)?;
+        if available_paths.is_empty() {
             panic!("No media files found");
         }
-        let new_path = available_images[0].clone();
 
         let (loader_tx, loader_rx) = unbounded();
 
+        // TODO: dynamically pick
         let pool = ThreadPool::new(32);
 
         let currently_loading = HashSet::new();
 
         let total_start = Instant::now();
         let (sender, receiver) = unbounded();
-        available_images
+        available_paths
             .par_iter()
             .for_each_with(sender, |s, path| {
-                let buf = load_thumbnail(path);
-                s.send((path.clone(), buf)).unwrap();
+                if let Some(buf) = load_file_data(path) {
+                    s.send((path.clone(), buf)).unwrap();
+                }else {
+                    log::error!("Failed to load: {path:?}");
+                };
             });
 
         let mut loaded_images: FxHashMap<ImageData, ImflowImageBuffer> = FxHashMap::default();
-        loaded_images.reserve(available_images.len());
+        loaded_images.reserve(available_paths.len());
 
         let mut loaded_thumbnails: FxHashMap<_, _> = FxHashMap::default();
-        loaded_thumbnails.reserve(available_images.len());
-        loaded_thumbnails.extend(receiver.iter());
+        loaded_thumbnails.reserve(available_paths.len());
+        loaded_thumbnails.extend(receiver.iter().map(|(path, (data, thumbnail))| {
+            if thumbnail.is_none() {
+                log::error!("Path {path:?} failed");
+            }
+            (data, thumbnail.unwrap())
+        }));
 
         let mut load_times: VecDeque<_> = VecDeque::default();
-        load_times.reserve(available_images.len());
+        load_times.reserve(available_paths.len());
+
+        let available_images: Vec<ImageData> = loaded_thumbnails.keys().cloned().sorted_by(|a, b| Ord::cmp(&a.path, &b.path)).collect();
+        let new_path = &(available_images[0]).clone();
 
         let total_time = total_start.elapsed();
         debug!(
@@ -160,13 +172,13 @@ impl ImageStore {
             loaded_thumbnails.len()
         );
 
-        let image = load_image(&new_path.clone()).unwrap();
+        let image = load_image(&new_path.path).unwrap();
         loaded_images.insert(new_path.clone(), image);
         let mut state = Self {
             current_image_id,
             loaded_images,
             available_images,
-            current_image_path: new_path,
+            current_image_path: new_path.clone(),
             pool,
             loader_rx,
             loader_tx,
@@ -290,7 +302,7 @@ impl ImageStore {
         let context = self.event_loop_proxy.clone();
         self.pool.execute(move || {
             debug!("Requested load of: {:?}", path.path);
-            let image = load_image(&path.clone()).unwrap();
+            let image = load_image(&path.path).unwrap();
             debug!("Loaded: {:?}", path.path);
             context
                 .send_event(AppEvent::ImageLoaded(path.clone()))
@@ -392,13 +404,15 @@ impl ImageStore {
                 .unwrap();
         }
 
-        let buf = load_thumbnail(&self.current_image_path);
-        self.loaded_images_thumbnails
-            .insert(self.current_image_path.clone(), buf);
+        unimplemented!("Image should already have a thumbnail");
 
-        self.loaded_images_thumbnails
-            .get(&self.current_image_path)
-            .unwrap()
+        // let buf = load_thumbnail(&self.current_image_path);
+        // self.loaded_images_thumbnails
+        //     .insert(self.current_image_path.clone(), buf);
+
+        // self.loaded_images_thumbnails
+        //     .get(&self.current_image_path)
+        //     .unwrap()
     }
 
     pub fn get_filtered_images(

@@ -88,7 +88,11 @@ pub fn read_rating_xmp(filename: &Path) -> Result<i32> {
         anyhow::bail!("XMP data not found in the file.");
     }
 
-    let xmp_meta = XmpMeta::from_str(std::str::from_utf8(xmp_data.as_ref().unwrap()).unwrap());
+    read_rating_from_raw_xmp(&xmp_data.unwrap())
+}
+
+pub fn read_rating_from_raw_xmp(xmp_data: &Vec<u8>) -> std::result::Result<i32, Error> {
+    let xmp_meta = XmpMeta::from_str(std::str::from_utf8(xmp_data.as_slice()).unwrap());
 
     Ok(xmp_meta
         .unwrap()

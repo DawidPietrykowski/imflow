@@ -7,7 +7,6 @@ use image::ImageReader;
 use image::Rgba;
 use image::imageops::FilterType;
 use image::metadata::Orientation;
-use itertools::Itertools;
 // use jxl_oxide::integration::JxlDecoder;
 // use jpegxl_rs::Endianness;
 // use jpegxl_rs::decode::PixelFormat;
@@ -49,6 +48,7 @@ use crate::utils::round_to_4_multiple;
 use crate::utils::slice_u8_to_u32;
 use crate::utils::vec_u8_to_u32;
 use crate::utils::vec_u32_to_u8;
+use crate::xmp::read_rating_from_raw_xmp;
 use crate::xmp::read_rating_xmp;
 
 // const EXIF_TAGLIST_TAG: &str = "Xmp.digiKam.TagsList";
@@ -196,12 +196,13 @@ fn get_format(path: &Path) -> Option<ImageFormat> {
     }
 }
 
-pub fn load_image(image: &ImageData) -> Result<ImflowImageBuffer, MediaLoadError> {
-    match image.format {
+pub fn load_image(image: &Path) -> Result<ImflowImageBuffer, MediaLoadError> {
+    let format = get_format(image).unwrap();
+    match format {
         ImageFormat::Heif => Ok(load_heif(image, false)),
         ImageFormat::Jxl => load_jxl(image),
-        ImageFormat::Jpg => load_jpg(image),
-        ImageFormat::Video => Ok(load_thumbnail_video(&image.path).unwrap()),
+        ImageFormat::Jpg => Ok(load_jpg_full(&image)),
+        ImageFormat::Video => Ok(load_thumbnail_video(&image).unwrap()),
     }
 }
 
@@ -213,55 +214,9 @@ pub enum MediaLoadError {
     Decoding(String),
 }
 
-fn load_jpg(image: &ImageData) -> Result<ImflowImageBuffer, MediaLoadError> {
-    let options = DecoderOptions::new_fast().jpeg_set_out_colorspace(ColorSpace::RGBA);
-
-    let file = read(&image.path)?;
-    let mut decoder = JpegDecoder::new(&file);
-    decoder.set_options(options);
-
-    decoder
-        .decode_headers()
-        .map_err(|e| MediaLoadError::Decoding(format!("Failed to decode JPEG headers: {}", e)))?;
-    let info = decoder
-        .info()
-        .ok_or_else(|| MediaLoadError::Decoding("Failed to read JPEG info".to_string()))?;
-
-    let width = info.width as usize;
-    let height = info.height as usize;
-    let mut buffer: Vec<u8> = vec![0; width * height * 4];
-    decoder
-        .decode_into(buffer.as_mut_slice())
-        .map_err(|e| MediaLoadError::Decoding(e.to_string()))?;
-
-    let exif = decoder.exif().unwrap();
-    let exif_reader = Reader::new();
-    let Ok(metadata) = exif_reader.read_raw(exif.to_vec()) else {
-        return Err(MediaLoadError::Decoding("Exif decoding failed".to_string()));
-    };
-
-    let orientation = Orientation::from_exif(
-        metadata
-            .get_field(Tag::Orientation, exif::In::PRIMARY)
-            .unwrap()
-            .value
-            .get_uint(0)
-            .unwrap() as u8,
-    )
-    .unwrap();
-
-    let rgba_buffer = vec_u8_to_u32(buffer);
-
-    Ok(ImflowImageBuffer {
-        width,
-        height,
-        rgba_buffer,
-        orientation,
-    })
-}
 use exif::Reader;
 use exif::Tag;
-fn load_jxl(_image: &ImageData) -> Result<ImflowImageBuffer, MediaLoadError> {
+fn load_jxl(_image: &Path) -> Result<ImflowImageBuffer, MediaLoadError> {
     // let file = read(&image.path)?;
 
     // let file = std::fs::File::open(image.path).expect("cannot open file");
@@ -329,7 +284,9 @@ fn load_media_files(dir: &PathBuf) -> Result<Vec<PathBuf>, io::Error> {
         if entry.path().is_dir() {
             all_entries.append(&mut load_media_files(&entry.path())?);
         } else {
-            all_entries.push(entry.path());
+            if get_format(&entry.path()).is_some() {
+                all_entries.push(entry.path());
+            }
         }
     }
     Ok(all_entries)
@@ -397,10 +354,10 @@ pub fn load_available_images(dir: PathBuf) -> Result<Vec<PathBuf>, io::Error> {
     // Ok(images)
 }
 
-fn has_thumbnail(file: File) -> bool {
-    let Ok(exif) = get_exif_data(file) else {
-        return false;
-    };
+fn has_thumbnail(exif: &nom_exif::Exif) -> bool {
+    // let Ok(exif) = get_exif_data(file) else {
+    //     return false;
+    // };
     // let Ok(exif) = Reader::new().read_from_container(&mut std::io::BufReader::new(&file)) else {
     //     return false;
     // };
@@ -424,107 +381,204 @@ fn has_thumbnail(file: File) -> bool {
 //         .and_then(|preview| preview.get_data().ok())
 // }
 
+fn load_jpg_full(path: &Path) -> ImflowImageBuffer {
+    let file = std::fs::File::open(path).unwrap();
+    let options = DecoderOptions::new_fast().jpeg_set_out_colorspace(ColorSpace::RGBA);
+
+    let file_bytes = read(path).unwrap();
+    let mut decoder = JpegDecoder::new(&file_bytes);
+    decoder.set_options(options);
+
+    decoder
+        .decode_headers()
+        .map_err(|e| MediaLoadError::Decoding(format!("Failed to decode JPEG headers: {}", e))).unwrap();
+    let info = decoder
+        .info()
+        .ok_or_else(|| MediaLoadError::Decoding("Failed to read JPEG info".to_string())).unwrap();
+
+    let width = info.width as usize;
+    let height = info.height as usize;
+    let mut buffer: Vec<u8> = vec![0; width * height * 4];
+    decoder
+        .decode_into(buffer.as_mut_slice())
+        .map_err(|e| MediaLoadError::Decoding(e.to_string())).unwrap();
+
+    // let exif_data = decoder.exif().unwrap();
+    let exif = get_exif_data(file.try_clone().unwrap()).unwrap();
+
+    let orientation = Orientation::from_exif(
+        exif.get_by_ifd_tag_code(0, nom_exif::ExifTag::Orientation.code()).unwrap().as_u16().unwrap() as u8
+    )
+    .unwrap();
+
+    let rgba_buffer = vec_u8_to_u32(buffer);
+
+    ImflowImageBuffer {
+        width,
+        height,
+        rgba_buffer,
+        orientation,
+    }
+}
+
 pub fn load_file_data(path: &Path) -> Option<(ImageData, Option<ImflowImageBuffer>)> {
     let format = get_format(path)?;
-    let file = std::fs::File::open(path).unwrap();
+    let mut file = std::fs::File::open(path).unwrap();
+    let hash = get_file_hash(&file);
     debug!("Loading file data from: {:?}", path);
-    let thumbnail = match format {
+    let (data, thumbnail) = match format {
         ImageFormat::Jpg => {
-            has_thumbnail(file);
+            // let options = DecoderOptions::new_fast().jpeg_set_out_colorspace(ColorSpace::RGBA);
+
+            // let file_bytes = read(path).unwrap();
+            // let mut decoder = JpegDecoder::new(&file_bytes);
+            // decoder.set_options(options);
+
+            // decoder
+            //     .decode_headers()
+            //     .map_err(|e| MediaLoadError::Decoding(format!("Failed to decode JPEG headers: {}", e))).unwrap();
+            // let info = decoder
+            //     .info()
+            //     .ok_or_else(|| MediaLoadError::Decoding("Failed to read JPEG info".to_string())).unwrap();
+
+            // let width = info.width as usize;
+            // let height = info.height as usize;
+            // let mut buffer: Vec<u8> = vec![0; width * height * 4];
+            // decoder
+            //     .decode_into(buffer.as_mut_slice())
+            //     .map_err(|e| MediaLoadError::Decoding(e.to_string())).unwrap();
+
+            // let exif_data = decoder.exif().unwrap();
+            file.seek(io::SeekFrom::Start(0)).unwrap();
+            let exif = get_exif_data(file.try_clone().unwrap()).unwrap();
+
+            // let orientation = Orientation::from_exif(
+            //     exif.get_by_ifd_tag_code(0, nom_exif::ExifTag::Orientation.code()).unwrap().as_u8().unwrap()
+            // )
+            // .unwrap();
+
+            // let rgba_buffer = vec_u8_to_u32(buffer);
+
+            // let image = ImflowImageBuffer {
+            //     width,
+            //     height,
+            //     rgba_buffer,
+            //     orientation,
+            // };
+
+            let thumbnail = if has_thumbnail(&exif) {
+                Some(load_thumbnail_exif(exif, file).unwrap())
+            } else {
+                Some(load_thumbnail_full(path))
+            };
+
+            let rating = read_rating_xmp(&path).unwrap_or(0);
+            let data = ImageData{
+                path: path.to_path_buf(),
+                format,
+                embedded_thumbnail: thumbnail.is_some(),
+                hash,
+                rating,
+                tags: vec![],
+            };
+
+            (data, thumbnail)
         },
-        ImageFormat::Jxl => None,
+        ImageFormat::Jxl => {
+            todo!();
+        },
         ImageFormat::Heif => {
             let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
             let binding = ctx.top_level_image_handles();
-            let handle = binding.first().unwrap();
-            if handle.number_of_thumbnails() > 0 {
-                
+            let main_handle = binding.first().unwrap();
+            let thumbnail = if main_handle.number_of_thumbnails() > 0 {
+                Some(load_thumbnail_heif(main_handle))
             } else {
-                None
+                Some(load_heif(path, true)) // TODO: optimize
+            };
+            let all_metadata = main_handle.all_metadata();
+            let mut rating = 0;
+            if let Some(xmp_raw) = all_metadata.iter().find(|m| m.content_type == "application/rdf+xml") {
+                rating = read_rating_from_raw_xmp(&xmp_raw.raw_data).unwrap_or(0);
             }
+            let data = ImageData{
+                path: path.to_path_buf(),
+                format,
+                embedded_thumbnail: thumbnail.is_some(),
+                hash,
+                rating,
+                tags: vec![],
+            };
+            (data, thumbnail)
         },
         ImageFormat::Video => {
-            None
+            let rating = read_rating_xmp(&path).unwrap_or(0);
+            let thumbnail = load_thumbnail_video(&path);
+            let data = ImageData{
+                path: path.to_path_buf(),
+                format,
+                embedded_thumbnail: thumbnail.is_some(),
+                hash,
+                rating,
+                tags: vec![],
+            };
+            (data, thumbnail)
         },
     };
-    // let mut orientation = Orientation::from_exif(meta.get_orientation() as u8)
-    //     .unwrap_or(Orientation::NoTransforms);
-    // let orientation = if format == ImageFormat::Video {
-    //     let orientation = load_thumbnail_video(path).unwrap().orientation;
-    //     debug!("video orientation: {:?}, {:?}", orientation, path);
-    //     orientation
-    // } else {
-    //     Orientation::from_exif(exif_reader.unwrap().get_field(Tag::Orientation, exif::In(0)).map(|f| f.value.as_uint().unwrap().get(0).unwrap()).unwrap_or(0) as u8).unwrap()
-    // };
-    let hash = get_file_hash(path);
-    // let tags = meta
-    //     .get_tag_multiple_strings(EXIF_TAGLIST_TAG)
-    //     .unwrap_or_default();
-    let tags = vec![];
-    let rating = read_rating_xmp(&path).unwrap_or(0);
-    let data = ImageData {
-        path: path.clone(),
-        format,
-        embedded_thumbnail,
-        hash,
-        rating,
-        tags,
-    };
-    let buffer = load_thumbnail(data)
+    Some((data, thumbnail))
 }
 
-pub fn load_thumbnail(path: &ImageData) -> ImflowImageBuffer {
-    let cache_path = path.get_cache_path();
-    let mut buffer: Option<Vec<u8>> = None;
-    if cache_path.exists() {
-        let read_bytes = fs::read(&cache_path).unwrap();
-        if read_bytes.is_empty() {
-            buffer = Some(read_bytes);
-        }
-    }
-    if let Some(bytes) = buffer {
-        debug!("Loading thumbnail for: {:?}", path.path);
-        let width = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
-        let height = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
-        let orientation =
-            Orientation::from_exif(u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as u8)
-                .unwrap_or(Orientation::NoTransforms);
-        let (ptr, len, cap) = bytes.into_raw_parts();
-        assert!(ptr.align_offset(4) == 0);
-        let buffer_u32 = unsafe {
-            Vec::from_raw_parts(
-                (ptr as usize + 12) as *mut u32,
-                (len - 12) / 4,
-                (cap - 12) / 4,
-            )
-        };
+// pub fn load_thumbnail(path: &ImageData) -> ImflowImageBuffer {
+//     let cache_path = path.get_cache_path();
+//     let mut buffer: Option<Vec<u8>> = None;
+//     if cache_path.exists() {
+//         let read_bytes = fs::read(&cache_path).unwrap();
+//         if read_bytes.is_empty() {
+//             buffer = Some(read_bytes);
+//         }
+//     }
+//     if let Some(bytes) = buffer {
+//         debug!("Loading thumbnail for: {:?}", path.path);
+//         let width = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+//         let height = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+//         let orientation =
+//             Orientation::from_exif(u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as u8)
+//                 .unwrap_or(Orientation::NoTransforms);
+//         let (ptr, len, cap) = bytes.into_raw_parts();
+//         assert!(ptr.align_offset(4) == 0);
+//         let buffer_u32 = unsafe {
+//             Vec::from_raw_parts(
+//                 (ptr as usize + 12) as *mut u32,
+//                 (len - 12) / 4,
+//                 (cap - 12) / 4,
+//             )
+//         };
 
-        assert_eq!(width * height, buffer_u32.len());
+//         assert_eq!(width * height, buffer_u32.len());
 
-        return ImflowImageBuffer {
-            width,
-            height,
-            rgba_buffer: buffer_u32,
-            orientation,
-        };
-    }
-    let thumbnail = match path.format {
-        ImageFormat::Heif => load_heif(path, true),
-        ImageFormat::Video => load_thumbnail_video(&path.path).unwrap(),
-        _ => load_thumbnail_exif(path).unwrap_or_else(|| {
-            println!("LOADING FULL {:?}", path.path);
-            load_thumbnail_full(path)
-        }),
-    };
+//         return ImflowImageBuffer {
+//             width,
+//             height,
+//             rgba_buffer: buffer_u32,
+//             orientation,
+//         };
+//     }
+//     let thumbnail = match path.format {
+//         ImageFormat::Heif => load_heif(path, true),
+//         ImageFormat::Video => load_thumbnail_video(&path.path).unwrap(),
+//         _ => load_thumbnail_exif(path).unwrap_or_else(|| {
+//             println!("LOADING FULL {:?}", path.path);
+//             load_thumbnail_full(path)
+//         }),
+//     };
 
-    save_thumbnail(&cache_path, thumbnail.clone());
-    thumbnail
-}
+//     save_thumbnail(&cache_path, thumbnail.clone());
+//     thumbnail
+// }
 
-fn get_exif_data(path: File) -> nom_exif::Result<nom_exif::Exif> {
+fn get_exif_data<R: Read + Seek>(source: R) -> nom_exif::Result<nom_exif::Exif> {
     let mut parser = nom_exif::MediaParser::new();
-
-    let ms = nom_exif::MediaSource::file(path)?;
+    let ms = nom_exif::MediaSource::seekable(source)?;
     assert!(ms.has_exif());
 
     let iter: nom_exif::ExifIter = parser.parse(ms)?;
@@ -532,12 +586,88 @@ fn get_exif_data(path: File) -> nom_exif::Result<nom_exif::Exif> {
     Ok(exif)
 }
 
-pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
-    if path.embedded_thumbnail {
-        println!("Loading file: {:?}", path.path);
-        let mut file = File::open(&path.path).unwrap();
+fn load_thumbnail_heif(handle: &libheif_rs::ImageHandle) -> ImflowImageBuffer {
+    let lib_heif = LibHeif::new();
+    let thumbnail_count = handle.number_of_thumbnails() as u32;
+    let mut thumbnail_ids = vec![0u32, thumbnail_count];
+    let cnt = handle.thumbnail_ids(&mut thumbnail_ids);
+    assert_ne!(cnt, 0);
+    let handle = &handle.thumbnail(thumbnail_ids[0]).unwrap();
 
-        let exif = get_exif_data(file.try_clone().unwrap()).unwrap();
+    let width = handle.width();
+    let height = handle.height();
+    let new_width: u32;
+    let new_height: u32;
+    const VAR_NAME: f32 = 640f32;
+    if width > height {
+        let scale = VAR_NAME / width as f32;
+        new_width = VAR_NAME as u32;
+        new_height = (height as f32 * scale) as u32;
+    } else {
+        let scale = VAR_NAME / height as f32;
+        new_height = VAR_NAME as u32;
+        new_width = (width as f32 * scale) as u32;
+    }
+
+    let thumbnail = lib_heif
+        .decode(handle, libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba), None)
+        .unwrap()
+        .scale(new_width, new_height, None)
+        .unwrap();
+
+    let planes = thumbnail.planes();
+    let interleaved_plane = planes.interleaved.unwrap();
+    assert!(!interleaved_plane.data.is_empty());
+    assert!(interleaved_plane.stride > 0);
+    assert_eq!(interleaved_plane.storage_bits_per_pixel, 32);
+
+    let rgba_buffer = interleaved_plane.data;
+
+    let width = interleaved_plane.width as usize;
+    let height = interleaved_plane.height as usize;
+    let u32_slice = slice_u8_to_u32(rgba_buffer);
+
+    ImflowImageBuffer {
+        width,
+        height,
+        rgba_buffer: u32_slice.to_vec(),
+        orientation: Orientation::NoTransforms,
+    }
+}
+
+fn load_image_heif(handle: &libheif_rs::ImageHandle) -> ImflowImageBuffer {
+    let lib_heif = LibHeif::new();
+
+    let thumbnail = lib_heif
+        .decode(&handle, libheif_rs::ColorSpace::Rgb(RgbChroma::Rgba), None)
+        .unwrap();
+
+    let planes = thumbnail.planes();
+    let interleaved_plane = planes.interleaved.unwrap();
+    assert!(!interleaved_plane.data.is_empty());
+    assert!(interleaved_plane.stride > 0);
+    assert_eq!(interleaved_plane.storage_bits_per_pixel, 32);
+
+    let rgba_buffer = interleaved_plane.data;
+
+    let width = interleaved_plane.width as usize;
+    let height = interleaved_plane.height as usize;
+    let u32_slice = slice_u8_to_u32(rgba_buffer);
+
+    ImflowImageBuffer {
+        width,
+        height,
+        rgba_buffer: u32_slice.to_vec(),
+        orientation: Orientation::NoTransforms,
+    }
+}
+
+pub fn load_thumbnail_exif<R: Read + Seek>(exif: nom_exif::Exif, mut file: R) -> Option<ImflowImageBuffer> {
+    // if path.embedded_thumbnail {
+    //     println!("Loading file: {:?}", path.path);
+        // let mut file = File::open(&path.path).unwrap();
+
+        // let exif = get_exif_data(file.try_clone().unwrap()).unwrap();
         let thumbnail_offset = exif
             .get_by_ifd_tag_code(1, nom_exif::ExifTag::ThumbnailOffset.code())
             .unwrap()
@@ -560,7 +690,7 @@ pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
         assert_eq!(compression, 6);
 
         file.seek(io::SeekFrom::Start(thumbnail_offset)).unwrap();
-        let mut tmp_buf = [0u8; 16];
+        let mut tmp_buf = [0u8; 128];
         file.read_exact(tmp_buf.as_mut_slice()).unwrap();
         println!("{:?}", tmp_buf);
         const JPG_MAGIC: &[u8; 3] = &[0xff, 0xd8, 0xff];
@@ -629,12 +759,9 @@ pub fn load_thumbnail_exif(path: &ImageData) -> Option<ImflowImageBuffer> {
         //     rgba_buffer,
         //     orientation: Orientation::NoTransforms,
         // })
-    } else {
-        None
-    }
 }
 
-pub fn load_thumbnail_video(path: &PathBuf) -> Option<ImflowImageBuffer> {
+pub fn load_thumbnail_video(path: &Path) -> Option<ImflowImageBuffer> {
     let mut ictx = ffmpeg::format::input(&path).unwrap();
     let best_video_stream_index = ictx
         .streams()
@@ -680,6 +807,7 @@ pub fn load_thumbnail_video(path: &PathBuf) -> Option<ImflowImageBuffer> {
     debug!("orientation: {:?}, {:?}\n", orientation, path);
 
     let key_frame = decoded_frame.unwrap();
+    debug!("frame wh: {:?}, {:?} {}\n", key_frame.width(), key_frame.height(), round_to_4_multiple(decoder.width() / 4));
 
     let mut scaler = ffmpeg::software::scaling::context::Context::get(
         decoder.format(),
@@ -697,6 +825,7 @@ pub fn load_thumbnail_video(path: &PathBuf) -> Option<ImflowImageBuffer> {
 
     let buffer = rgba_frame.plane::<[u8; 4]>(0).as_flattened();
     let buffer = vec_u8_to_u32(buffer.to_vec());
+    debug!("smaller frame wh: {:?}, {:?}\n", rgba_frame.width(), rgba_frame.height());
     Some(ImflowImageBuffer {
         width: rgba_frame.width() as usize,
         height: rgba_frame.height() as usize,
@@ -705,8 +834,8 @@ pub fn load_thumbnail_video(path: &PathBuf) -> Option<ImflowImageBuffer> {
     })
 }
 
-pub fn load_thumbnail_full(path: &ImageData) -> ImflowImageBuffer {
-    let mut decoder = ImageReader::open(&path.path)
+pub fn load_thumbnail_full(path: &Path) -> ImflowImageBuffer {
+    let mut decoder = ImageReader::open(path)
         .unwrap()
         .into_decoder()
         .unwrap();
@@ -729,9 +858,9 @@ pub fn load_thumbnail_full(path: &ImageData) -> ImflowImageBuffer {
     }
 }
 
-pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
+pub fn load_heif(path: &Path, resize: bool) -> ImflowImageBuffer {
     let lib_heif = LibHeif::new();
-    let ctx = HeifContext::read_from_file(path.path.to_str().unwrap()).unwrap();
+    let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
     let mut orientation = Orientation::NoTransforms;
     let binding = ctx.top_level_image_handles();
     let handle = binding.first().unwrap();
@@ -801,8 +930,8 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
         let mut width = image.width() as usize;
         let mut height = image.height() as usize;
         let scale = max(width, height) as f32 / MAX as f32;
-        width = round_to_4_multiple((width as f32 / scale) as usize);
-        height = round_to_4_multiple((height as f32 / scale) as usize);
+        width = round_to_4_multiple((width as f32 / scale) as u32) as usize;
+        height = round_to_4_multiple((height as f32 / scale) as u32) as usize;
         image = image.scale(width as u32, height as u32, None).unwrap();
     }
 
@@ -827,8 +956,7 @@ pub fn load_heif(path: &ImageData, resize: bool) -> ImflowImageBuffer {
     }
 }
 
-pub fn get_file_hash(path: &PathBuf) -> GenericArray<u8, U32> {
-    let mut file = File::open(path).unwrap();
+pub fn get_file_hash(mut file: &File) -> GenericArray<u8, U32> {
     let mut buf = [0u8; 16 * 1024];
     let read_bytes = file.read(&mut buf).unwrap();
     assert_ne!(read_bytes, 0);

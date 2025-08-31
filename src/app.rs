@@ -539,8 +539,6 @@ impl App {
                 "updating image: {:?} {:?} {:?}",
                 imbuf.width, imbuf.height, imbuf.orientation
             );
-            let bt = Backtrace::capture();
-            println!("Stack trace:\n{}", bt);
             let width = imbuf.width as u32;
             let height = imbuf.height as u32;
             let buffer_u8 = unsafe {

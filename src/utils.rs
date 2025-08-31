@@ -28,9 +28,6 @@ pub(crate) fn slice_u8_to_u32(rgba_buffer: &[u8]) -> &[u32] {
     unsafe { std::slice::from_raw_parts(rgba_buffer.as_ptr() as *const u32, rgba_buffer.len() / 4) }
 }
 
-pub(crate) fn round_to_4_multiple<T>(value: T) -> T
-where
-    T: Copy + Add<Output = T> + BitAnd<Output = T> + From<u8>,
-{
-    (value + T::from(7u8)) & T::from(!7u8)
+pub(crate) fn round_to_4_multiple(value: u32) -> u32 {
+    (value + 3) & !3
 }

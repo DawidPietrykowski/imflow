@@ -12,7 +12,7 @@ use crate::app::App;
 
 fn main() {
     if env::var("RUST_LOG").is_err() {
-        unsafe { env::set_var("RUST_LOG", "error,imflow=debug") }
+        unsafe { env::set_var("RUST_LOG", "error,imflow=warn") }
     }
     env_logger::init();
     rexiv2::initialize().expect("Failed to initialize rexiv2");
