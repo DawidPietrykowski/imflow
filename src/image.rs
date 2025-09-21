@@ -450,7 +450,10 @@ pub fn load_file_data(path: &Path) -> Option<(ImageData, Option<ImflowImageBuffe
 
             // let exif_data = decoder.exif().unwrap();
             file.seek(io::SeekFrom::Start(0)).unwrap();
-            let exif = get_exif_data(file.try_clone().unwrap()).unwrap();
+            let Ok(exif) = get_exif_data(file.try_clone().unwrap()) else {
+                // println!("Could not find exif in file: {:?}", path);
+                return None;
+            };
 
             // let orientation = Orientation::from_exif(
             //     exif.get_by_ifd_tag_code(0, nom_exif::ExifTag::Orientation.code()).unwrap().as_u8().unwrap()
@@ -692,20 +695,20 @@ pub fn load_thumbnail_exif<R: Read + Seek>(exif: nom_exif::Exif, mut file: R) ->
         file.seek(io::SeekFrom::Start(thumbnail_offset)).unwrap();
         let mut tmp_buf = [0u8; 128];
         file.read_exact(tmp_buf.as_mut_slice()).unwrap();
-        println!("{:?}", tmp_buf);
+        // println!("{:?}", tmp_buf);
         const JPG_MAGIC: &[u8; 3] = &[0xff, 0xd8, 0xff];
         let header_offset = tmp_buf.windows(3).position(|p| p == JPG_MAGIC).unwrap() as u64;
-        println!("offset: {:?}", header_offset);
+        // println!("offset: {:?}", header_offset);
         file.seek(io::SeekFrom::Start(thumbnail_offset + header_offset))
             .unwrap();
 
         let mut buf = vec![0u8; (thumbnail_length) as usize];
         // file.seek_relative(header_offset as i64).unwrap();
         file.read_exact(buf.as_mut_slice()).unwrap();
-        println!(
-            "off {:#X}: {:#X} {:#X} {:#X}",
-            thumbnail_offset, buf[0], buf[1], buf[2]
-        );
+        // println!(
+        //     "off {:#X}: {:#X} {:#X} {:#X}",
+        //     thumbnail_offset, buf[0], buf[1], buf[2]
+        // );
         let mut decoder = image::ImageReader::new(Cursor::new(buf))
             .with_guessed_format()
             .unwrap();
