@@ -693,7 +693,7 @@ pub fn load_thumbnail_exif<R: Read + Seek>(exif: nom_exif::Exif, mut file: R) ->
         assert_eq!(compression, 6);
 
         file.seek(io::SeekFrom::Start(thumbnail_offset)).unwrap();
-        let mut tmp_buf = [0u8; 128];
+        let mut tmp_buf = [0u8; 256];
         file.read_exact(tmp_buf.as_mut_slice()).unwrap();
         // println!("{:?}", tmp_buf);
         const JPG_MAGIC: &[u8; 3] = &[0xff, 0xd8, 0xff];
