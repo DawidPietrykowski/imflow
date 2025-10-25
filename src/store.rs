@@ -16,7 +16,7 @@ use std::time::Instant;
 use threadpool::ThreadPool;
 use winit::event_loop::EventLoopProxy;
 
-const PRELOAD_NEXT_IMAGE_N: usize = 0;
+const PRELOAD_NEXT_IMAGE_N: usize = 25;
 const MAX_LOADED_IMAGES: usize = 450;
 
 pub const EDIT_TAG: &str = "edit";

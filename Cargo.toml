@@ -17,7 +17,7 @@ zune-image = {version = "0.4.15", features = ["all"]}
 jxl-oxide = {version = "0.12.4", features = ["rayon", "image"]}
 libheif-rs = "1.1.0"
 # jpegxl-rs = "0.11.2"
-ffmpeg-next = "7.1.0"
+ffmpeg-next = "8.0.0"
 
 rexiv2 = "0.10.0"
 xmp_toolkit = "1.10.0"
