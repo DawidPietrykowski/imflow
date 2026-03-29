@@ -8,9 +8,9 @@ use egui_wgpu::wgpu::{Limits, SurfaceError};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::metadata::Orientation;
 use imflow::image::{ImageData, swap_wh};
-use imflow::store::{AppEvent, CROP_TAG, EDIT_TAG, FileFilters, ImageStore, TagAction};
+use imflow::store::{AppEvent, CROP_TAG, EDIT_TAG, FileFilters, ImageStore, PERSON_TAG, TagAction};
 use itertools::Itertools;
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use std::backtrace::Backtrace;
 use std::collections::HashMap;
 use std::f32::consts::PI;
@@ -918,6 +918,16 @@ fn draw_ui(
                 ui.label(egui::RichText::new("CROP").monospace().size(32.0).strong());
             });
     }
+    if current_image.tags.contains(&PERSON_TAG.to_string()) {
+        egui::Window::new("PERSON")
+            .collapsible(false)
+            .resizable(false)
+            .default_width(10.0)
+            .title_bar(false)
+            .show(state.egui_renderer.context(), |ui| {
+                ui.label(egui::RichText::new("PERSON").monospace().size(32.0).strong());
+            });
+    }
 
     egui::TopBottomPanel::bottom("Thumbnails")
         .default_height(120.0)
@@ -1163,6 +1173,9 @@ impl ApplicationHandler<AppEvent> for App {
                                 Key::C => {
                                     store.set_tag(CROP_TAG.to_string(), TagAction::Toggle);
                                 }
+                                Key::R => {
+                                    store.set_tag(PERSON_TAG.to_string(), TagAction::Toggle);
+                                }
                                 Key::Backtick => store.set_rating(0),
                                 Key::Num0 => store.set_rating(0),
                                 Key::Num1 => store.set_rating(1),
@@ -1262,7 +1275,12 @@ impl ImageLoader for ImflowEguiLoader {
         for (i, &value) in imbuf.rgba_buffer.iter().enumerate() {
             let bytes = value.to_le_bytes();
             let start = i * 4;
-            image_buffer[start..start + 4].copy_from_slice(&bytes);
+            if start + 4 - 1 < image_buffer.len() {
+                image_buffer[start..start + 4].copy_from_slice(&bytes);
+            } else {
+                warn!("Attempted to write out of bounds for thumbnail");
+                break;
+            }
         }
 
         let res = ImageLoadResult::Ok(egui::load::ImagePoll::Ready {

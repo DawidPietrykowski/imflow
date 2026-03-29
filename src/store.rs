@@ -21,6 +21,7 @@ const MAX_LOADED_IMAGES: usize = 450;
 
 pub const EDIT_TAG: &str = "edit";
 pub const CROP_TAG: &str = "crop";
+pub const PERSON_TAG: &str = "person";
 
 #[derive(Debug, Clone)]
 pub enum AppEvent {
@@ -53,6 +54,7 @@ impl Default for FileFilters {
         let mut tags = HashMap::new();
         tags.insert(EDIT_TAG.to_string(), false);
         tags.insert(CROP_TAG.to_string(), false);
+        tags.insert(PERSON_TAG.to_string(), false);
         FileFilters {
             rating: [true; 6],
             name: "".to_string(),
@@ -199,6 +201,7 @@ impl ImageStore {
         let mut tags = HashMap::new();
         tags.insert(EDIT_TAG.to_string(), false);
         tags.insert(CROP_TAG.to_string(), false);
+        tags.insert(PERSON_TAG.to_string(), false);
         for image_data in self.loaded_images_thumbnails.keys() {
             if !formats.contains_key(&image_data.format) {
                 formats.insert(image_data.format.clone(), true);
