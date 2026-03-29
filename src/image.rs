@@ -15,6 +15,7 @@ use image::metadata::Orientation;
 use libheif_rs::ItemId;
 use libheif_rs::{HeifContext, LibHeif, RgbChroma};
 use log::debug;
+use rexiv2::Metadata;
 // use log::warn;
 // use rexiv2::Metadata;
 // use rexiv2::Metadata;
@@ -146,6 +147,25 @@ pub fn get_rating(image: &ImageData) -> i32 {
     // } else {
     //     0
     // }
+}
+
+
+fn get_tags(filename: &Path) -> Result<Option<Vec<String>>, String> {
+    if !fs::metadata(filename).is_ok() {
+        return Err("File doesn't exist".to_string());
+    }
+
+    let meta = Metadata::new_from_path(filename);
+    match meta {
+        Ok(meta) => {
+            let tags = meta.get_tag_multiple_strings("Xmp.digiKam.TagsList");
+            match tags {
+                Ok(tags) => Ok(Some(tags.iter().map(|t| t.to_lowercase()).collect())),
+                Err(_) => Ok(None),
+            }
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 // pub fn get_orientation(path: &PathBuf) -> Orientation {
@@ -406,10 +426,11 @@ fn load_jpg_full(path: &Path) -> ImflowImageBuffer {
     // let exif_data = decoder.exif().unwrap();
     let exif = get_exif_data(file.try_clone().unwrap()).unwrap();
 
-    let orientation = Orientation::from_exif(
-        exif.get_by_ifd_tag_code(0, nom_exif::ExifTag::Orientation.code()).unwrap().as_u16().unwrap() as u8
-    )
-    .unwrap();
+    let exif_orientation = exif.get_by_ifd_tag_code(0, nom_exif::ExifTag::Orientation.code());
+    let orientation = match exif_orientation {
+        Some(exif_orientation) => Orientation::from_exif(exif_orientation.as_u16().unwrap() as u8).unwrap(),
+        None => Orientation::NoTransforms,
+    };
 
     let rgba_buffer = vec_u8_to_u32(buffer);
 
@@ -476,13 +497,14 @@ pub fn load_file_data(path: &Path) -> Option<(ImageData, Option<ImflowImageBuffe
             };
 
             let rating = read_rating_xmp(&path).unwrap_or(0);
+            let tags = get_tags(path).unwrap_or_default().unwrap_or_default();
             let data = ImageData{
                 path: path.to_path_buf(),
                 format,
                 embedded_thumbnail: thumbnail.is_some(),
                 hash,
                 rating,
-                tags: vec![],
+                tags,
             };
 
             (data, thumbnail)
@@ -504,26 +526,28 @@ pub fn load_file_data(path: &Path) -> Option<(ImageData, Option<ImflowImageBuffe
             if let Some(xmp_raw) = all_metadata.iter().find(|m| m.content_type == "application/rdf+xml") {
                 rating = read_rating_from_raw_xmp(&xmp_raw.raw_data).unwrap_or(0);
             }
+            let tags = get_tags(path).unwrap_or_default().unwrap_or_default();
             let data = ImageData{
                 path: path.to_path_buf(),
                 format,
                 embedded_thumbnail: thumbnail.is_some(),
                 hash,
                 rating,
-                tags: vec![],
+                tags,
             };
             (data, thumbnail)
         },
         ImageFormat::Video => {
             let rating = read_rating_xmp(&path).unwrap_or(0);
             let thumbnail = load_thumbnail_video(&path);
+            let tags = get_tags(path).unwrap_or_default().unwrap_or_default();
             let data = ImageData{
                 path: path.to_path_buf(),
                 format,
                 embedded_thumbnail: thumbnail.is_some(),
                 hash,
                 rating,
-                tags: vec![],
+                tags,
             };
             (data, thumbnail)
         },
