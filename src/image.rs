@@ -19,6 +19,7 @@ use rexiv2::Metadata;
 // use log::warn;
 // use rexiv2::Metadata;
 // use rexiv2::Metadata;
+use num_rational::Ratio;
 use sha2::Digest;
 use sha2::Sha256;
 use sha2::digest::consts::U32;
@@ -89,6 +90,7 @@ pub struct ImageData {
     pub hash: GenericArray<u8, U32>,
     pub rating: i32,
     pub tags: Vec<String>,
+    pub metadata: ImageMetadata,
 }
 
 impl ImageData {
@@ -132,6 +134,19 @@ impl Debug for ImageData {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct ImageMetadata {
+    pub f_stop: Option<f64>,
+    pub shutter_speed: Option<Ratio<i32>>,
+    pub iso: Option<i32>,
+}
+
+impl ImageMetadata {
+    pub fn empty() -> ImageMetadata {
+        ImageMetadata::default()
+    }
+}
+
 #[derive(Clone)]
 pub struct ImflowImageBuffer {
     pub width: usize,
@@ -149,7 +164,6 @@ pub fn get_rating(image: &ImageData) -> i32 {
     // }
 }
 
-
 fn get_tags(filename: &Path) -> Result<Option<Vec<String>>, String> {
     if !fs::metadata(filename).is_ok() {
         return Err("File doesn't exist".to_string());
@@ -164,6 +178,22 @@ fn get_tags(filename: &Path) -> Result<Option<Vec<String>>, String> {
                 Err(_) => Ok(None),
             }
         }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn get_metadata(filename: &Path) -> Result<ImageMetadata, String> {
+    if !fs::metadata(filename).is_ok() {
+        return Err("File doesn't exist".to_string());
+    }
+
+    let meta = Metadata::new_from_path(filename);
+    match meta {
+        Ok(meta) => Ok(ImageMetadata {
+            f_stop: meta.get_fnumber(),
+            shutter_speed: meta.get_exposure_time(),
+            iso: meta.get_iso_speed(),
+        }),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -315,62 +345,62 @@ fn load_media_files(dir: &PathBuf) -> Result<Vec<PathBuf>, io::Error> {
 pub fn load_available_images(dir: PathBuf) -> Result<Vec<PathBuf>, io::Error> {
     load_media_files(&dir)
     // let images: Vec<PathBuf> = load_media_files(&dir)?
-        // .iter()
-        // .sorted()
-        // .filter_map(|path| {
-        //     let format = get_format(path)?;
+    // .iter()
+    // .sorted()
+    // .filter_map(|path| {
+    //     let format = get_format(path)?;
 
-        //     let file = std::fs::File::open(path).unwrap();
-        //     // exif.get_field(tag, ifd_num)
-        //     // println!("Read orientation {orientation:?}");
-        //     // return orientation;
-        //     // exif.
+    //     let file = std::fs::File::open(path).unwrap();
+    //     // exif.get_field(tag, ifd_num)
+    //     // println!("Read orientation {orientation:?}");
+    //     // return orientation;
+    //     // exif.
 
-        //     // let Ok(meta) = Metadata::new_from_path(path) else {
-        //     //     warn!("Image has no metadata, skipping: {:?}", path);
-        //     //     return None;
-        //     // };
-        //     println!("path: {:?}", path);
-        //     let embedded_thumbnail = if format == ImageFormat::Heif {
-        //         let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
-        //         let binding = ctx.top_level_image_handles();
-        //         let handle = binding.first().unwrap();
-        //         handle.number_of_thumbnails() > 0
-        //     } else if format == ImageFormat::Video {
-        //         false
-        //     } else {
-        //         has_thumbnail(file)
-        //         // meta.get_preview_images().is_some()
-        //     };
-        //     // let mut orientation = Orientation::from_exif(meta.get_orientation() as u8)
-        //     //     .unwrap_or(Orientation::NoTransforms);
-        //     // let orientation = if format == ImageFormat::Video {
-        //     //     let orientation = load_thumbnail_video(path).unwrap().orientation;
-        //     //     debug!("video orientation: {:?}, {:?}", orientation, path);
-        //     //     orientation
-        //     // } else {
-        //     //     Orientation::from_exif(exif_reader.unwrap().get_field(Tag::Orientation, exif::In(0)).map(|f| f.value.as_uint().unwrap().get(0).unwrap()).unwrap_or(0) as u8).unwrap()
-        //     // };
-        //     let hash = get_file_hash(path);
-        //     // let tags = meta
-        //     //     .get_tag_multiple_strings(EXIF_TAGLIST_TAG)
-        //     //     .unwrap_or_default();
-        //     let tags = vec![];
-        //     let rating = read_rating_xmp(&path).unwrap_or(0);
-        //     // match format {
-        //     //     ImageFormat::Video => ,
-        //     //     _ => meta.get_tag_numeric(EXIF_RATING_TAG),
-        //     // };
-        //     Some(ImageData {
-        //         path: path.clone(),
-        //         format,
-        //         embedded_thumbnail,
-        //         hash,
-        //         rating,
-        //         tags,
-        //     })
-        // })
-        // .collect();
+    //     // let Ok(meta) = Metadata::new_from_path(path) else {
+    //     //     warn!("Image has no metadata, skipping: {:?}", path);
+    //     //     return None;
+    //     // };
+    //     println!("path: {:?}", path);
+    //     let embedded_thumbnail = if format == ImageFormat::Heif {
+    //         let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
+    //         let binding = ctx.top_level_image_handles();
+    //         let handle = binding.first().unwrap();
+    //         handle.number_of_thumbnails() > 0
+    //     } else if format == ImageFormat::Video {
+    //         false
+    //     } else {
+    //         has_thumbnail(file)
+    //         // meta.get_preview_images().is_some()
+    //     };
+    //     // let mut orientation = Orientation::from_exif(meta.get_orientation() as u8)
+    //     //     .unwrap_or(Orientation::NoTransforms);
+    //     // let orientation = if format == ImageFormat::Video {
+    //     //     let orientation = load_thumbnail_video(path).unwrap().orientation;
+    //     //     debug!("video orientation: {:?}, {:?}", orientation, path);
+    //     //     orientation
+    //     // } else {
+    //     //     Orientation::from_exif(exif_reader.unwrap().get_field(Tag::Orientation, exif::In(0)).map(|f| f.value.as_uint().unwrap().get(0).unwrap()).unwrap_or(0) as u8).unwrap()
+    //     // };
+    //     let hash = get_file_hash(path);
+    //     // let tags = meta
+    //     //     .get_tag_multiple_strings(EXIF_TAGLIST_TAG)
+    //     //     .unwrap_or_default();
+    //     let tags = vec![];
+    //     let rating = read_rating_xmp(&path).unwrap_or(0);
+    //     // match format {
+    //     //     ImageFormat::Video => ,
+    //     //     _ => meta.get_tag_numeric(EXIF_RATING_TAG),
+    //     // };
+    //     Some(ImageData {
+    //         path: path.clone(),
+    //         format,
+    //         embedded_thumbnail,
+    //         hash,
+    //         rating,
+    //         tags,
+    //     })
+    // })
+    // .collect();
     // Ok(images)
 }
 
@@ -411,24 +441,29 @@ fn load_jpg_full(path: &Path) -> ImflowImageBuffer {
 
     decoder
         .decode_headers()
-        .map_err(|e| MediaLoadError::Decoding(format!("Failed to decode JPEG headers: {}", e))).unwrap();
+        .map_err(|e| MediaLoadError::Decoding(format!("Failed to decode JPEG headers: {}", e)))
+        .unwrap();
     let info = decoder
         .info()
-        .ok_or_else(|| MediaLoadError::Decoding("Failed to read JPEG info".to_string())).unwrap();
+        .ok_or_else(|| MediaLoadError::Decoding("Failed to read JPEG info".to_string()))
+        .unwrap();
 
     let width = info.width as usize;
     let height = info.height as usize;
     let mut buffer: Vec<u8> = vec![0; width * height * 4];
     decoder
         .decode_into(buffer.as_mut_slice())
-        .map_err(|e| MediaLoadError::Decoding(e.to_string())).unwrap();
+        .map_err(|e| MediaLoadError::Decoding(e.to_string()))
+        .unwrap();
 
     // let exif_data = decoder.exif().unwrap();
     let exif = get_exif_data(file.try_clone().unwrap()).unwrap();
 
     let exif_orientation = exif.get_by_ifd_tag_code(0, nom_exif::ExifTag::Orientation.code());
     let orientation = match exif_orientation {
-        Some(exif_orientation) => Orientation::from_exif(exif_orientation.as_u16().unwrap() as u8).unwrap(),
+        Some(exif_orientation) => {
+            Orientation::from_exif(exif_orientation.as_u16().unwrap() as u8).unwrap()
+        }
         None => Orientation::NoTransforms,
     };
 
@@ -498,20 +533,22 @@ pub fn load_file_data(path: &Path) -> Option<(ImageData, Option<ImflowImageBuffe
 
             let rating = read_rating_xmp(&path).unwrap_or(0);
             let tags = get_tags(path).unwrap_or_default().unwrap_or_default();
-            let data = ImageData{
+            let metadata = get_metadata(path).unwrap_or_default();
+            let data = ImageData {
                 path: path.to_path_buf(),
                 format,
                 embedded_thumbnail: thumbnail.is_some(),
                 hash,
                 rating,
                 tags,
+                metadata,
             };
 
             (data, thumbnail)
-        },
+        }
         ImageFormat::Jxl => {
             todo!();
-        },
+        }
         ImageFormat::Heif => {
             let ctx = HeifContext::read_from_file(path.to_str().unwrap()).unwrap();
             let binding = ctx.top_level_image_handles();
@@ -523,31 +560,38 @@ pub fn load_file_data(path: &Path) -> Option<(ImageData, Option<ImflowImageBuffe
             };
             let all_metadata = main_handle.all_metadata();
             let mut rating = 0;
-            if let Some(xmp_raw) = all_metadata.iter().find(|m| m.content_type == "application/rdf+xml") {
+            if let Some(xmp_raw) = all_metadata
+                .iter()
+                .find(|m| m.content_type == "application/rdf+xml")
+            {
                 rating = read_rating_from_raw_xmp(&xmp_raw.raw_data).unwrap_or(0);
             }
             let tags = get_tags(path).unwrap_or_default().unwrap_or_default();
-            let data = ImageData{
+            let metadata = get_metadata(path).unwrap_or_default();
+            let data = ImageData {
                 path: path.to_path_buf(),
                 format,
                 embedded_thumbnail: thumbnail.is_some(),
                 hash,
                 rating,
                 tags,
+                metadata,
             };
             (data, thumbnail)
-        },
+        }
         ImageFormat::Video => {
             let rating = read_rating_xmp(&path).unwrap_or(0);
             let thumbnail = load_thumbnail_video(&path);
             let tags = get_tags(path).unwrap_or_default().unwrap_or_default();
-            let data = ImageData{
+            let metadata = get_metadata(path).unwrap_or_default();
+            let data = ImageData {
                 path: path.to_path_buf(),
                 format,
                 embedded_thumbnail: thumbnail.is_some(),
                 hash,
                 rating,
                 tags,
+                metadata,
             };
             (data, thumbnail)
         },

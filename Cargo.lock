@@ -1598,6 +1598,7 @@ dependencies = [
  "libheif-rs",
  "log",
  "nom-exif",
+ "num-rational",
  "open",
  "pollster",
  "rayon",

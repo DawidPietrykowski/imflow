@@ -898,6 +898,36 @@ fn draw_ui(
             });
         });
 
+    egui::Window::new("Metadata")
+        .collapsible(false)
+        .resizable(false)
+        .default_width(5.0)
+        .show(state.egui_renderer.context(), |ui| {
+            ui.vertical_centered(|ui| {
+                if let Some(f_stop) = current_image.metadata.f_stop {
+                    ui.label(
+                        egui::RichText::new(format!("F: {}", f_stop))
+                            .size(12.0)
+                            .strong(),
+                    );
+                }
+                if let Some(shutter_speed) = current_image.metadata.shutter_speed {
+                    ui.label(
+                        egui::RichText::new(format!("S: {}", shutter_speed))
+                            .size(12.0)
+                            .strong(),
+                    );
+                }
+                if let Some(iso) = current_image.metadata.iso {
+                    ui.label(
+                        egui::RichText::new(format!("ISO: {}", iso))
+                            .size(12.0)
+                            .strong(),
+                    );
+                }
+            });
+        });
+
     if current_image.tags.contains(&EDIT_TAG.to_string()) {
         egui::Window::new("EDIT")
             .collapsible(false)
