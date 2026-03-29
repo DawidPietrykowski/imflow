@@ -594,7 +594,7 @@ pub fn load_file_data(path: &Path) -> Option<(ImageData, Option<ImflowImageBuffe
                 metadata,
             };
             (data, thumbnail)
-        },
+        }
     };
     Some((data, thumbnail))
 }
@@ -733,103 +733,106 @@ fn load_image_heif(handle: &libheif_rs::ImageHandle) -> ImflowImageBuffer {
     }
 }
 
-pub fn load_thumbnail_exif<R: Read + Seek>(exif: nom_exif::Exif, mut file: R) -> Option<ImflowImageBuffer> {
+pub fn load_thumbnail_exif<R: Read + Seek>(
+    exif: nom_exif::Exif,
+    mut file: R,
+) -> Option<ImflowImageBuffer> {
     // if path.embedded_thumbnail {
     //     println!("Loading file: {:?}", path.path);
-        // let mut file = File::open(&path.path).unwrap();
+    // let mut file = File::open(&path.path).unwrap();
 
-        // let exif = get_exif_data(file.try_clone().unwrap()).unwrap();
-        let thumbnail_offset = exif
-            .get_by_ifd_tag_code(1, nom_exif::ExifTag::ThumbnailOffset.code())
-            .unwrap()
-            .as_u32()
-            .unwrap() as u64;
-        let thumbnail_length = exif
-            .get_by_ifd_tag_code(1, nom_exif::ExifTag::ThumbnailLength.code())
-            .unwrap()
-            .as_u32()
-            .unwrap() as u64;
-        let thumbnail_orientation = exif
-            .get_by_ifd_tag_code(1, nom_exif::ExifTag::Orientation.code())
-            .map(|e| e.as_u16().unwrap() as u8);
-        // TODO: Support other formats
-        let compression = exif
-            .get_by_ifd_tag_code(1, nom_exif::ExifTag::Compression.code())
-            .unwrap()
-            .as_u16()
-            .unwrap();
-        assert_eq!(compression, 6);
+    // let exif = get_exif_data(file.try_clone().unwrap()).unwrap();
+    let thumbnail_offset = exif
+        .get_by_ifd_tag_code(1, nom_exif::ExifTag::ThumbnailOffset.code())
+        .unwrap()
+        .as_u32()
+        .unwrap() as u64;
+    let thumbnail_length = exif
+        .get_by_ifd_tag_code(1, nom_exif::ExifTag::ThumbnailLength.code())
+        .unwrap()
+        .as_u32()
+        .unwrap() as u64;
+    let thumbnail_orientation = exif
+        .get_by_ifd_tag_code(1, nom_exif::ExifTag::Orientation.code())
+        .map(|e| e.as_u16().unwrap() as u8);
+    // TODO: Support other formats
+    let compression = exif
+        .get_by_ifd_tag_code(1, nom_exif::ExifTag::Compression.code())
+        .unwrap()
+        .as_u16()
+        .unwrap();
+    assert_eq!(compression, 6);
 
-        file.seek(io::SeekFrom::Start(thumbnail_offset)).unwrap();
-        let mut tmp_buf = [0u8; 256];
-        file.read_exact(tmp_buf.as_mut_slice()).unwrap();
-        // println!("{:?}", tmp_buf);
-        const JPG_MAGIC: &[u8; 3] = &[0xff, 0xd8, 0xff];
-        let header_offset = tmp_buf.windows(3).position(|p| p == JPG_MAGIC).unwrap() as u64;
-        // println!("offset: {:?}", header_offset);
-        file.seek(io::SeekFrom::Start(thumbnail_offset + header_offset))
-            .unwrap();
+    file.seek(io::SeekFrom::Start(thumbnail_offset)).unwrap();
+    let mut tmp_buf = [0u8; 256];
+    file.read_exact(tmp_buf.as_mut_slice()).unwrap();
+    // println!("{:?}", tmp_buf);
+    const JPG_MAGIC: &[u8; 3] = &[0xff, 0xd8, 0xff];
+    let header_offset = tmp_buf.windows(3).position(|p| p == JPG_MAGIC).unwrap() as u64;
+    // println!("offset: {:?}", header_offset);
+    file.seek(io::SeekFrom::Start(thumbnail_offset + header_offset))
+        .unwrap();
 
-        let mut buf = vec![0u8; (thumbnail_length) as usize];
-        // file.seek_relative(header_offset as i64).unwrap();
-        file.read_exact(buf.as_mut_slice()).unwrap();
-        // println!(
-        //     "off {:#X}: {:#X} {:#X} {:#X}",
-        //     thumbnail_offset, buf[0], buf[1], buf[2]
-        // );
-        let mut decoder = image::ImageReader::new(Cursor::new(buf))
-            .with_guessed_format()
-            .unwrap();
-        decoder.set_format(image::ImageFormat::Jpeg);
-        let image = decoder.decode().unwrap();
-        let width: usize = image.width() as usize;
-        let height: usize = image.height() as usize;
-        let rgba_buffer = image_to_rgba_buffer(image);
-        let orientation = thumbnail_orientation
-            .map(|o| Orientation::from_exif(o).unwrap())
-            .unwrap_or(Orientation::NoTransforms);
+    let mut buf = vec![0u8; (thumbnail_length) as usize];
+    // file.seek_relative(header_offset as i64).unwrap();
+    file.read_exact(buf.as_mut_slice()).unwrap();
+    // println!(
+    //     "off {:#X}: {:#X} {:#X} {:#X}",
+    //     thumbnail_offset, buf[0], buf[1], buf[2]
+    // );
+    let mut decoder = image::ImageReader::new(Cursor::new(buf))
+        .with_guessed_format()
+        .unwrap();
+    decoder.set_format(image::ImageFormat::Jpeg);
+    let image = decoder.decode().unwrap();
+    let width: usize = image.width() as usize;
+    let height: usize = image.height() as usize;
+    let rgba_buffer = image_to_rgba_buffer(image);
+    let orientation = thumbnail_orientation
+        .map(|o| Orientation::from_exif(o).unwrap())
+        .unwrap_or(Orientation::NoTransforms);
 
-        Some(ImflowImageBuffer {
-            width,
-            height,
-            rgba_buffer,
-            orientation,
-        })
+    Some(ImflowImageBuffer {
+        width,
+        height,
+        rgba_buffer,
+        orientation,
+    })
 
-        // let Ok(exif) = Reader::new().read_from_container(&mut std::io::BufReader::new(&path.path)) else {
-        //     return false;
-        // };
-        // nom_ex
-        // let comp = exif.buf();
-        // return None;
-        // todo!()
-        // let decoder = image::ImageReader::new(Cursor::new(thumbnail))
-        //     .with_guessed_format()
-        //     .unwrap();
-        // let image = decoder.decode().unwrap();
-        // let orientation = path.orientation;
+    // let Ok(exif) = Reader::new().read_from_container(&mut std::io::BufReader::new(&path.path)) else {
+    //     return false;
+    // };
+    // nom_ex
+    // let comp = exif.buf();
+    // return None;
+    // todo!()
+    // let decoder = image::ImageReader::new(Cursor::new(thumbnail))
+    //     .with_guessed_format()
+    //     .unwrap();
+    // let image = decoder.decode().unwrap();
+    // let orientation = path.orientation;
 
-        // let width = image.width();
-        // let height = image.height();
-        // // TODO: extract from image
-        // let ratio_image = 1.5;
-        // let ratio_thumbnail = width as f32 / height as f32;
-        // let crop = ratio_thumbnail / ratio_image;
-        // let start = ((0.5 - (crop / 2.0)) * height as f32).round();
-        // let cropped_height = (height as f32 * crop) as u32;
-        // let mut image = image.crop_imm(0, start as u32, width, cropped_height);
+    // let width = image.width();
+    // let height = image.height();
+    // // TODO: extract from image
+    // let ratio_image = 1.5;
+    // let ratio_thumbnail = width as f32 / height as f32;
+    // let crop = ratio_thumbnail / ratio_image;
+    // let start = ((0.5 - (crop / 2.0)) * height as f32).round();
+    // let cropped_height = (height as f32 * crop) as u32;
+    // let mut image = image.crop_imm(0, start as u32, width, cropped_height);
 
-        // image.apply_orientation(orientation);
-        // let width: usize = image.width() as usize;
-        // let height: usize = image.height() as usize;
-        // let rgba_buffer = image_to_rgba_buffer(image);
+    // image.apply_orientation(orientation);
+    // let width: usize = image.width() as usize;
+    // let height: usize = image.height() as usize;
+    // let rgba_buffer = image_to_rgba_buffer(image);
 
-        // Some(ImflowImageBuffer {
-        //     width,
-        //     height,
-        //     rgba_buffer,
-        //     orientation: Orientation::NoTransforms,
-        // })
+    // Some(ImflowImageBuffer {
+    //     width,
+    //     height,
+    //     rgba_buffer,
+    //     orientation: Orientation::NoTransforms,
+    // })
 }
 
 pub fn load_thumbnail_video(path: &Path) -> Option<ImflowImageBuffer> {
@@ -878,7 +881,12 @@ pub fn load_thumbnail_video(path: &Path) -> Option<ImflowImageBuffer> {
     debug!("orientation: {:?}, {:?}\n", orientation, path);
 
     let key_frame = decoded_frame.unwrap();
-    debug!("frame wh: {:?}, {:?} {}\n", key_frame.width(), key_frame.height(), round_to_4_multiple(decoder.width() / 4));
+    debug!(
+        "frame wh: {:?}, {:?} {}\n",
+        key_frame.width(),
+        key_frame.height(),
+        round_to_4_multiple(decoder.width() / 4)
+    );
 
     let mut scaler = ffmpeg::software::scaling::context::Context::get(
         decoder.format(),
@@ -896,7 +904,11 @@ pub fn load_thumbnail_video(path: &Path) -> Option<ImflowImageBuffer> {
 
     let buffer = rgba_frame.plane::<[u8; 4]>(0).as_flattened();
     let buffer = vec_u8_to_u32(buffer.to_vec());
-    debug!("smaller frame wh: {:?}, {:?}\n", rgba_frame.width(), rgba_frame.height());
+    debug!(
+        "smaller frame wh: {:?}, {:?}\n",
+        rgba_frame.width(),
+        rgba_frame.height()
+    );
     Some(ImflowImageBuffer {
         width: rgba_frame.width() as usize,
         height: rgba_frame.height() as usize,
@@ -906,10 +918,7 @@ pub fn load_thumbnail_video(path: &Path) -> Option<ImflowImageBuffer> {
 }
 
 pub fn load_thumbnail_full(path: &Path) -> ImflowImageBuffer {
-    let mut decoder = ImageReader::open(path)
-        .unwrap()
-        .into_decoder()
-        .unwrap();
+    let mut decoder = ImageReader::open(path).unwrap().into_decoder().unwrap();
     let orientation = decoder.orientation().unwrap();
     let image = DynamicImage::from_decoder(decoder).unwrap();
 

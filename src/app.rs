@@ -955,7 +955,12 @@ fn draw_ui(
             .default_width(10.0)
             .title_bar(false)
             .show(state.egui_renderer.context(), |ui| {
-                ui.label(egui::RichText::new("PERSON").monospace().size(32.0).strong());
+                ui.label(
+                    egui::RichText::new("PERSON")
+                        .monospace()
+                        .size(32.0)
+                        .strong(),
+                );
             });
     }
 

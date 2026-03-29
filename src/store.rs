@@ -1,4 +1,4 @@
-use crate::image::{load_file_data, ImageData, ImageFormat};
+use crate::image::{ImageData, ImageFormat, load_file_data};
 use crate::image::{ImflowImageBuffer, load_available_images, load_image};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use exiftool::ExifTool;
@@ -139,15 +139,13 @@ impl ImageStore {
 
         let total_start = Instant::now();
         let (sender, receiver) = unbounded();
-        available_paths
-            .par_iter()
-            .for_each_with(sender, |s, path| {
-                if let Some(buf) = load_file_data(path) {
-                    s.send((path.clone(), buf)).unwrap();
-                }else {
-                    log::error!("Failed to load: {path:?}");
-                };
-            });
+        available_paths.par_iter().for_each_with(sender, |s, path| {
+            if let Some(buf) = load_file_data(path) {
+                s.send((path.clone(), buf)).unwrap();
+            } else {
+                log::error!("Failed to load: {path:?}");
+            };
+        });
 
         let mut loaded_images: FxHashMap<ImageData, ImflowImageBuffer> = FxHashMap::default();
         loaded_images.reserve(available_paths.len());
@@ -164,7 +162,11 @@ impl ImageStore {
         let mut load_times: VecDeque<_> = VecDeque::default();
         load_times.reserve(available_paths.len());
 
-        let available_images: Vec<ImageData> = loaded_thumbnails.keys().cloned().sorted_by(|a, b| Ord::cmp(&a.path, &b.path)).collect();
+        let available_images: Vec<ImageData> = loaded_thumbnails
+            .keys()
+            .cloned()
+            .sorted_by(|a, b| Ord::cmp(&a.path, &b.path))
+            .collect();
         let new_path = &(available_images[0]).clone();
 
         let total_time = total_start.elapsed();
