@@ -4,14 +4,13 @@ use egui::{
     Align, Color32, ColorImage, Event, Image, ImageSource, Key, PointerButton, Pos2, Rect, Sense,
     TextureOptions, Vec2,
 };
-use egui_wgpu::wgpu::{Limits, SurfaceError};
+use egui_wgpu::wgpu::{CurrentSurfaceTexture, ExperimentalFeatures, Limits, RenderPassDescriptor};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::metadata::Orientation;
 use imflow::image::{ImageData, swap_wh};
 use imflow::store::{AppEvent, CROP_TAG, EDIT_TAG, FileFilters, ImageStore, PERSON_TAG, TagAction};
 use itertools::Itertools;
 use log::{debug, info, trace, warn};
-use std::backtrace::Backtrace;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::path::PathBuf;
@@ -152,7 +151,7 @@ fn setup_texture(
         address_mode_w: wgpu::AddressMode::ClampToEdge,
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
         ..Default::default()
     });
 
@@ -244,8 +243,8 @@ fn setup_texture(
         layout: Some(
             &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Texture Pipeline Layout"),
-                bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&bind_group_layout)],
+                immediate_size: 0,
             }),
         ),
         vertex: wgpu::VertexState {
@@ -270,8 +269,8 @@ fn setup_texture(
         },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
         cache: None,
+        multiview_mask: None,
     });
 
     (texture, bind_group, render_pipeline, transform_buffer)
@@ -332,6 +331,7 @@ impl AppState {
                 required_limits: limits,
                 memory_hints: Default::default(),
                 trace: wgpu::Trace::Off,
+                experimental_features: ExperimentalFeatures::disabled(),
             })
             .await
             .expect("Failed to create device");
@@ -458,7 +458,7 @@ pub struct App {
 
 impl App {
     pub fn new(path: PathBuf, event_loop_proxy: EventLoopProxy<AppEvent>) -> Self {
-        let instance = egui_wgpu::wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = egui_wgpu::wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         Self {
             instance,
             state: None,
@@ -691,19 +691,28 @@ impl App {
         let surface_texture = state.surface.get_current_texture();
 
         let surface_texture = match surface_texture {
-            Err(SurfaceError::Outdated) => {
+            CurrentSurfaceTexture::Outdated => {
                 debug!("wgpu surface outdated");
                 return false;
             }
-            Err(SurfaceError::Timeout) => {
+            CurrentSurfaceTexture::Timeout => {
                 debug!("wgpu surface timeout");
                 return false;
             }
-            Err(_) => {
-                surface_texture.expect("Failed to acquire next swap chain texture");
+            CurrentSurfaceTexture::Lost => {
+                debug!("wgpu surface lost");
                 return false;
             }
-            Ok(surface_texture) => surface_texture,
+            CurrentSurfaceTexture::Occluded => {
+                debug!("wgpu surface occluded");
+                return false;
+            },
+            CurrentSurfaceTexture::Validation => {
+                debug!("wgpu surface validation");
+                return false;
+            },
+            CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
+            CurrentSurfaceTexture::Suboptimal(surface_texture) => surface_texture,
         };
 
         let surface_view = surface_texture
@@ -812,7 +821,7 @@ fn draw_command(
         contents: bytemuck::cast_slice(&indices),
         usage: wgpu::BufferUsages::INDEX,
     });
-    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+    let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
         label: Some("Texture Render Pass"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: texture_view,
@@ -821,10 +830,12 @@ fn draw_command(
                 load: wgpu::LoadOp::Load,
                 store: wgpu::StoreOp::Store,
             },
+            depth_slice: None,
         })],
         depth_stencil_attachment: None,
         timestamp_writes: None,
         occlusion_query_set: None,
+        multiview_mask: None,
     });
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);
@@ -838,7 +849,7 @@ fn draw_command(
 fn clear_texture_command(encoder: &mut wgpu::CommandEncoder, texture_view: &wgpu::TextureView) {
     // Clear buffer with black
     {
-        let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let _ = encoder.begin_render_pass(&RenderPassDescriptor {
             label: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &texture_view,
@@ -852,10 +863,12 @@ fn clear_texture_command(encoder: &mut wgpu::CommandEncoder, texture_view: &wgpu
                     }),
                     store: wgpu::StoreOp::Store,
                 },
+                depth_slice: None,
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
 }

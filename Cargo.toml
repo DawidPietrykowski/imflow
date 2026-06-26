@@ -4,20 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-egui = "0.32.1"
-egui-wgpu = { version = "0.32.1",features = ["winit"] }
-egui-winit = "0.32.1"
-winit = "0.30.12"
+egui = "0.34.*"
+egui-wgpu = { version = "0.34.*",features = ["winit"] }
+egui-winit = "0.34.*"
+winit = "0.30.13"
 pollster = "0.4.0"
 
 clap = { version = "4.5.34", features = ["derive"] }
 
-image = "0.25.6"
+image = "0.25.10"
 zune-image = {version = "0.4.15", features = ["all"]}
 jxl-oxide = {version = "0.12.4", features = ["rayon", "image"]}
 libheif-rs = "1.1.0"
-# jpegxl-rs = "0.11.2"
-ffmpeg-next = "8.0.0"
+ffmpeg-next = "8.1.0"
 
 rexiv2 = "0.10.0"
 xmp_toolkit = "1.10.0"

@@ -1,5 +1,5 @@
 use egui::{Color32, Context, Rangef, Visuals};
-use egui_wgpu::wgpu::{CommandEncoder, Device, Queue, StoreOp, TextureFormat, TextureView};
+use egui_wgpu::wgpu::{CommandEncoder, Device, Queue, RenderPassDescriptor, StoreOp, TextureFormat, TextureView};
 use egui_wgpu::{Renderer, ScreenDescriptor, wgpu};
 use egui_winit::State;
 use winit::event::WindowEvent;
@@ -45,9 +45,11 @@ impl EguiRenderer {
         let egui_renderer = Renderer::new(
             device,
             output_color_format,
-            output_depth_format,
-            msaa_samples,
-            true,
+            egui_wgpu::RendererOptions {
+                msaa_samples,
+                depth_stencil_format: output_depth_format,
+                ..Default::default()
+            },
         );
 
         EguiRenderer {
@@ -101,7 +103,7 @@ impl EguiRenderer {
         }
         self.renderer
             .update_buffers(device, queue, encoder, &tris, &screen_descriptor);
-        let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let rpass = encoder.begin_render_pass(&RenderPassDescriptor {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: window_surface_view,
                 resolve_target: None,
@@ -109,11 +111,13 @@ impl EguiRenderer {
                     load: egui_wgpu::wgpu::LoadOp::Load,
                     store: StoreOp::Store,
                 },
+                depth_slice: None,
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             label: Some("egui main render pass"),
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         self.renderer
