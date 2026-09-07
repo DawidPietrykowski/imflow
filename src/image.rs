@@ -239,7 +239,7 @@ fn get_format(path: &Path) -> Option<ImageFormat> {
         Some(ImageFormat::Jpg)
     // } else if ["jxl"].contains(extension) {
     //     Some(ImageFormat::Jxl)
-    } else if ["mp4", "mov", "avi"].contains(extension) {
+    } else if ["mp4", "mov", "avi", "m4v"].contains(extension) {
         Some(ImageFormat::Video)
     } else {
         None
