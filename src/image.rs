@@ -456,15 +456,16 @@ fn load_jpg_full(path: &Path) -> ImflowImageBuffer {
         .map_err(|e| MediaLoadError::Decoding(e.to_string()))
         .unwrap();
 
-    // let exif_data = decoder.exif().unwrap();
-    let exif = get_exif_data(file.try_clone().unwrap()).unwrap();
-
-    let exif_orientation = exif.get_by_ifd_tag_code(0, nom_exif::ExifTag::Orientation.code());
-    let orientation = match exif_orientation {
-        Some(exif_orientation) => {
-            Orientation::from_exif(exif_orientation.as_u16().unwrap() as u8).unwrap()
+    let exif = get_exif_data(file.try_clone().unwrap());
+    let orientation = if let Ok(exif) = exif {
+        match exif.get_by_ifd_tag_code(0, nom_exif::ExifTag::Orientation.code()) {
+            Some(exif_orientation) => {
+                Orientation::from_exif(exif_orientation.as_u16().unwrap() as u8).unwrap()
+            }
+            None => Orientation::NoTransforms,
         }
-        None => Orientation::NoTransforms,
+    } else {
+        Orientation::NoTransforms
     };
 
     let rgba_buffer = vec_u8_to_u32(buffer);
@@ -506,10 +507,7 @@ pub fn load_file_data(path: &Path) -> Option<(ImageData, Option<ImflowImageBuffe
 
             // let exif_data = decoder.exif().unwrap();
             file.seek(io::SeekFrom::Start(0)).unwrap();
-            let Ok(exif) = get_exif_data(file.try_clone().unwrap()) else {
-                // println!("Could not find exif in file: {:?}", path);
-                return None;
-            };
+            let exif = get_exif_data(file.try_clone().unwrap());
 
             // let orientation = Orientation::from_exif(
             //     exif.get_by_ifd_tag_code(0, nom_exif::ExifTag::Orientation.code()).unwrap().as_u8().unwrap()
@@ -525,7 +523,9 @@ pub fn load_file_data(path: &Path) -> Option<(ImageData, Option<ImflowImageBuffe
             //     orientation,
             // };
 
-            let thumbnail = if has_thumbnail(&exif) {
+            let thumbnail = if let Ok(exif) = exif
+                && has_thumbnail(&exif)
+            {
                 Some(load_thumbnail_exif(exif, file).unwrap())
             } else {
                 Some(load_thumbnail_full(path))
